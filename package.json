@@ -1,0 +1,9 @@
+{
+  "name": "product-passport-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal MVP for generating a product passport report from a fashion product URL.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

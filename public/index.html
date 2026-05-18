@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Product Passport Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Product Passport Agent</p>
+        <h1>Check what a fashion brand actually reveals about a product.</h1>
+        <p class="intro">
+          Paste a product URL from Zara, H&amp;M, Uniqlo, Zalando, ASOS, or another retailer to generate a cautious, structured transparency report.
+        </p>
+      </section>
+
+      <section class="panel">
+        <form id="analysis-form" class="analysis-form">
+          <label class="label" for="product-url">Fashion product URL</label>
+          <div class="input-row">
+            <input
+              id="product-url"
+              name="productUrl"
+              type="url"
+              placeholder="https://www.zara.com/..."
+              required
+            />
+            <button type="submit" id="submit-button">Analyse product</button>
+          </div>
+        </form>
+
+        <div id="status" class="status" aria-live="polite"></div>
+      </section>
+
+      <section id="report" class="report hidden" aria-live="polite"></section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>
