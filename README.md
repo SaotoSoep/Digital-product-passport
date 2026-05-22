@@ -18,19 +18,19 @@ The current UI is configured as a mock-data-only Product Passport-light workflow
   - public evidence visible on the page
   - missing or unverified information
 
-## Report sections
+## Product Passport-light report structure
 
-- Product summary
-- Material explained in simple language
-- Sustainability claims found
-- Evidence level per claim
-- Production / origin transparency
-- Washing and care advice
-- Transparency score
-- Claim strength score
-- Conclusion
-- Sources / evidence used
-- What is unknown or not publicly verifiable
+The current Product Passport-light output is mock-data-only and is meant to show the expected report shape for review.
+
+- Product summary: a short, plain-language overview of the item.
+- Materials: the main materials explained in simple words.
+- Sustainability claims: any environmental or ethical claims shown on the product page.
+- Evidence level: how strongly each claim is supported by public page content.
+- Missing information: details that are absent, unclear, or not publicly verifiable.
+- Confidence scores: simple scores that show how confident the report is in the visible information.
+- Conclusion: a short consumer-friendly wrap-up of what is known and what is still uncertain.
+
+Missing or unverifiable information should be shown explicitly and not invented.
 
 ## MVP principles
 
