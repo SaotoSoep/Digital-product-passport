@@ -4,9 +4,49 @@ const button = document.getElementById("submit-button");
 const statusBox = document.getElementById("status");
 const reportContainer = document.getElementById("report");
 
-function badgeClass(confidence) {
-  return `badge ${String(confidence || "").toLowerCase()}`;
-}
+const mockProductPassport = {
+  productName: "Relaxed Organic Cotton Overshirt",
+  brand: "Northline Studio",
+  confidenceScore: "Medium",
+  materials: [
+    {
+      name: "Organic cotton",
+      percentage: "78%",
+      confidence: "High",
+    },
+    {
+      name: "Recycled polyester",
+      percentage: "22%",
+      confidence: "Medium",
+    },
+  ],
+  claims: [
+    {
+      claim: "Made with organic cotton",
+      evidenceLevel: "Brand claim on product page",
+      confidence: "Medium",
+    },
+    {
+      claim: "Contains recycled materials",
+      evidenceLevel: "Material composition mention",
+      confidence: "Medium",
+    },
+  ],
+  missingInformation: [
+    {
+      label: "Country of manufacture",
+      value: "Information not found",
+    },
+    {
+      label: "Factory or supplier details",
+      value: "Not publicly verifiable",
+    },
+    {
+      label: "Third-party certification reference",
+      value: "Information not found",
+    },
+  ],
+};
 
 function escapeHtml(value) {
   return String(value)
@@ -17,17 +57,43 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function badgeClass(confidence) {
+  return `badge ${String(confidence || "").toLowerCase()}`;
+}
+
+function isValidProductUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch (error) {
+    return false;
+  }
+}
+
+function renderMaterials(materials) {
+  return materials
+    .map(
+      (material) => `
+        <li class="detail-item">
+          <div class="detail-topline">
+            <span>${escapeHtml(material.name)}${material.percentage ? ` (${escapeHtml(material.percentage)})` : ""}</span>
+            <span class="${badgeClass(material.confidence)}">${escapeHtml(material.confidence)}</span>
+          </div>
+        </li>
+      `
+    )
+    .join("");
+}
+
 function renderClaims(claims) {
   return claims
     .map(
       (claim) => `
-        <li class="claim-item">
-          <div class="claim-topline">
+        <li class="detail-item">
+          <div class="detail-topline">
             <span>${escapeHtml(claim.claim)}</span>
             <span class="${badgeClass(claim.confidence)}">${escapeHtml(claim.confidence)}</span>
           </div>
-          <p><strong>Brand claim:</strong> ${escapeHtml(claim.brandClaim)}</p>
-          <p><strong>Public evidence:</strong> ${escapeHtml(claim.publicEvidence)}</p>
           <p class="muted"><strong>Evidence level:</strong> ${escapeHtml(claim.evidenceLevel)}</p>
         </li>
       `
@@ -35,93 +101,51 @@ function renderClaims(claims) {
     .join("");
 }
 
-function renderSources(sources) {
-  return sources
+function renderMissingInformation(items) {
+  return items
     .map(
-      (source) => `
-        <li>
-          <strong>${escapeHtml(source.type)}:</strong> ${escapeHtml(source.label)}
+      (item) => `
+        <li class="detail-item">
+          <p><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.value)}</p>
         </li>
       `
     )
     .join("");
 }
 
-function renderUnknowns(unknowns) {
-  return unknowns.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
-}
-
-function renderReport(data) {
-  const { metadata, report } = data;
-
+function renderReport(passport, submittedUrl) {
   reportContainer.innerHTML = `
     <div class="report-header">
       <div>
-        <p class="eyebrow">Structured report</p>
-        <h2 class="report-title">Product Passport Report</h2>
+        <p class="eyebrow">Mock report</p>
+        <h2 class="report-title">Product Passport-light</h2>
       </div>
       <div class="report-meta">
-        <div><strong>Retailer:</strong> ${escapeHtml(metadata.retailer)}</div>
-        <div><strong>Mode:</strong> ${escapeHtml(metadata.analysisMode)}</div>
+        <div><strong>Input URL:</strong> ${escapeHtml(submittedUrl)}</div>
+        <div><strong>Overall confidence:</strong> ${escapeHtml(passport.confidenceScore)}</div>
       </div>
     </div>
 
     <div class="grid">
       <article class="card">
-        <h2>1. Product summary</h2>
-        <p>${escapeHtml(report.productSummary)}</p>
+        <h2>Product</h2>
+        <p><strong>Name:</strong> ${escapeHtml(passport.productName)}</p>
+        <p><strong>Brand:</strong> ${escapeHtml(passport.brand)}</p>
       </article>
 
       <article class="card">
-        <h2>2. Material explained</h2>
-        <p><strong>Detected material:</strong> ${escapeHtml(report.materialExplained.rawMaterial)}</p>
-        <p>${escapeHtml(report.materialExplained.simpleExplanation)}</p>
-        <p class="muted">Confidence: ${escapeHtml(report.materialExplained.confidence)}</p>
+        <h2>Materials</h2>
+        <ul class="detail-list">${renderMaterials(passport.materials)}</ul>
       </article>
 
       <article class="card">
-        <h2>3. Sustainability claims found</h2>
-        <ul class="claim-list">${renderClaims(report.sustainabilityClaimsFound)}</ul>
+        <h2>Claims</h2>
+        <ul class="detail-list">${renderClaims(passport.claims)}</ul>
       </article>
 
       <article class="card">
-        <h2>4. Production / origin transparency</h2>
-        <p><strong>Status:</strong> ${escapeHtml(report.productionOriginTransparency.status)}</p>
-        <p>${escapeHtml(report.productionOriginTransparency.detail)}</p>
-        <p class="muted">Confidence: ${escapeHtml(report.productionOriginTransparency.confidence)}</p>
-      </article>
-
-      <article class="card">
-        <h2>5. Washing and care advice</h2>
-        <p>${escapeHtml(report.washingCareAdvice.summary)}</p>
-        <p class="muted">Confidence: ${escapeHtml(report.washingCareAdvice.confidence)}</p>
-      </article>
-
-      <article class="card">
-        <h2>6. Transparency score</h2>
-        <p class="score">${escapeHtml(report.transparencyScore.score)}</p>
-        <p>${escapeHtml(report.transparencyScore.rationale)}</p>
-      </article>
-
-      <article class="card">
-        <h2>7. Claim strength score</h2>
-        <p class="score">${escapeHtml(report.claimStrengthScore.score)}</p>
-        <p>${escapeHtml(report.claimStrengthScore.rationale)}</p>
-      </article>
-
-      <article class="card">
-        <h2>8. Conclusion</h2>
-        <p>${escapeHtml(report.conclusion)}</p>
-      </article>
-
-      <article class="card">
-        <h2>9. Sources / evidence used</h2>
-        <ul class="source-list">${renderSources(report.sources)}</ul>
-      </article>
-
-      <article class="card">
-        <h2>10. What is unknown or not publicly verifiable</h2>
-        <ul class="unknown-list">${renderUnknowns(report.unknowns)}</ul>
+        <h2>Missing information</h2>
+        <ul class="detail-list">${renderMissingInformation(passport.missingInformation)}</ul>
       </article>
     </div>
   `;
@@ -129,39 +153,40 @@ function renderReport(data) {
   reportContainer.classList.remove("hidden");
 }
 
-async function submitAnalysis(productUrl) {
-  const response = await fetch("/api/analyze", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ productUrl }),
+function getMockProductPassport() {
+  return new Promise((resolve) => {
+    window.setTimeout(() => resolve(mockProductPassport), 900);
   });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error || "Analysis failed");
-  }
-
-  return data;
 }
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const productUrl = input.value.trim();
-  statusBox.textContent = "Analysing public signals and brand claims...";
-  button.disabled = true;
   reportContainer.classList.add("hidden");
 
+  if (!productUrl) {
+    statusBox.textContent = "Enter a product URL to continue.";
+    return;
+  }
+
+  if (!isValidProductUrl(productUrl)) {
+    statusBox.textContent = "Enter a valid product URL starting with http:// or https://.";
+    return;
+  }
+
+  statusBox.textContent = "Loading mock Product Passport-light data...";
+  button.disabled = true;
+  button.textContent = "Analysing...";
+
   try {
-    const data = await submitAnalysis(productUrl);
-    renderReport(data);
-    statusBox.textContent = "Report ready.";
+    const passport = await getMockProductPassport();
+    renderReport(passport, productUrl);
+    statusBox.textContent = "Mock passport ready for review.";
   } catch (error) {
-    statusBox.textContent = error.message;
+    statusBox.textContent = error.message || "Unable to render the mock passport.";
   } finally {
     button.disabled = false;
+    button.textContent = "Analyse product";
   }
 });

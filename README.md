@@ -4,6 +4,10 @@ Product Passport Agent is a small MVP web app for checking what a fashion produc
 
 Users paste a product URL from a retailer such as Zara, H&M, Uniqlo, Zalando, or ASOS, and the app returns a structured Product Passport Report. The report is consumer-facing and independent. It is not an official brand-issued Digital Product Passport.
 
+## Current demo mode
+
+The current UI is configured as a mock-data-only Product Passport-light workflow for review purposes. Submitting a URL validates the input and renders a static example passport card without performing live scraping or calling the analysis endpoint.
+
 ## What it does
 
 - Fetches a submitted product URL server-side
