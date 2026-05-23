@@ -148,6 +148,13 @@ button:disabled {
   padding: 28px;
 }
 
+.footer-note {
+  margin: 18px 4px 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
 .hidden {
   display: none;
 }
