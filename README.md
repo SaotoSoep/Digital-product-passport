@@ -6,7 +6,7 @@ Users paste a product URL from a retailer such as Zara, H&M, Uniqlo, Zalando, or
 
 ## Current demo mode
 
-The current UI is configured as a mock-data-only Product Passport-light workflow for review purposes. Submitting a URL validates the input and renders a static example passport card without performing live scraping or calling the analysis endpoint.
+The current UI is configured as a mock-data-only Product Passport Agent workflow for review purposes. Submitting a URL validates the input and renders a static example Product Passport Report without performing live scraping or calling the analysis endpoint.
 
 ## What it does
 
@@ -18,9 +18,9 @@ The current UI is configured as a mock-data-only Product Passport-light workflow
   - public evidence visible on the page
   - missing or unverified information
 
-## Product Passport-light report structure
+## Product Passport Report structure
 
-The current Product Passport-light output is mock-data-only and is meant to show the expected report shape for review.
+The current Product Passport Report output is mock-data-only and is meant to show the expected report shape for review.
 
 - Product summary: a short, plain-language overview of the item.
 - Materials: the main materials explained in simple words.
