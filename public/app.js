@@ -4,7 +4,7 @@ const button = document.getElementById("submit-button");
 const statusBox = document.getElementById("status");
 const reportContainer = document.getElementById("report");
 
-const mockProductPassport = {
+const mockProductPassportReport = {
   productName: "Relaxed Organic Cotton Overshirt",
   brand: "Northline Studio",
   confidenceScore: "Medium",
@@ -118,7 +118,7 @@ function renderReport(passport, submittedUrl) {
     <div class="report-header">
       <div>
         <p class="eyebrow">Mock report</p>
-        <h2 class="report-title">Product Passport-light</h2>
+        <h2 class="report-title">Product Passport Report</h2>
       </div>
       <div class="report-meta">
         <div><strong>Input URL:</strong> ${escapeHtml(submittedUrl)}</div>
@@ -155,7 +155,7 @@ function renderReport(passport, submittedUrl) {
 
 function getMockProductPassport() {
   return new Promise((resolve) => {
-    window.setTimeout(() => resolve(mockProductPassport), 900);
+    window.setTimeout(() => resolve(mockProductPassportReport), 900);
   });
 }
 
@@ -175,16 +175,16 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  statusBox.textContent = "Loading mock Product Passport-light data...";
+  statusBox.textContent = "Loading mock Product Passport Report...";
   button.disabled = true;
   button.textContent = "Analysing...";
 
   try {
     const passport = await getMockProductPassport();
     renderReport(passport, productUrl);
-    statusBox.textContent = "Mock passport ready for review.";
+    statusBox.textContent = "Mock Product Passport Report ready for review.";
   } catch (error) {
-    statusBox.textContent = error.message || "Unable to render the mock passport.";
+    statusBox.textContent = error.message || "Unable to render the mock Product Passport Report.";
   } finally {
     button.disabled = false;
     button.textContent = "Analyse product";
