@@ -89,7 +89,7 @@ function renderClaims(claims) {
   return claims
     .map(
       (claim) => `
-        <li class="detail-item">
+        <li class="detail-item claim-item">
           <div class="detail-topline">
             <span>${escapeHtml(claim.claim)}</span>
             <span class="${badgeClass(claim.confidence)}">${escapeHtml(claim.confidence)}</span>
@@ -105,7 +105,7 @@ function renderMissingInformation(items) {
   return items
     .map(
       (item) => `
-        <li class="detail-item">
+        <li class="detail-item unknown-item">
           <p><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.value)}</p>
         </li>
       `
@@ -118,7 +118,7 @@ function renderReport(passport, submittedUrl) {
     <div class="report-header">
       <div>
         <p class="eyebrow">Mock report</p>
-        <h2 class="report-title">Product Passport-light</h2>
+        <h2 class="report-title">Product Passport Report</h2>
       </div>
       <div class="report-meta">
         <div><strong>Input URL:</strong> ${escapeHtml(submittedUrl)}</div>
@@ -175,14 +175,14 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  statusBox.textContent = "Loading mock Product Passport-light data...";
+  statusBox.textContent = "Analysing mock Product Passport Report data...";
   button.disabled = true;
   button.textContent = "Analysing...";
 
   try {
     const passport = await getMockProductPassport();
     renderReport(passport, productUrl);
-    statusBox.textContent = "Mock passport ready for review.";
+    statusBox.textContent = "Mock Product Passport Report ready for review.";
   } catch (error) {
     statusBox.textContent = error.message || "Unable to render the mock passport.";
   } finally {
