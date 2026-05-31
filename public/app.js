@@ -89,7 +89,7 @@ function renderClaims(claims) {
   return claims
     .map(
       (claim) => `
-        <li class="detail-item">
+        <li class="detail-item claim-item">
           <div class="detail-topline">
             <span>${escapeHtml(claim.claim)}</span>
             <span class="${badgeClass(claim.confidence)}">${escapeHtml(claim.confidence)}</span>
@@ -105,7 +105,7 @@ function renderMissingInformation(items) {
   return items
     .map(
       (item) => `
-        <li class="detail-item">
+        <li class="detail-item unknown-item">
           <p><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.value)}</p>
         </li>
       `
@@ -175,7 +175,7 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  statusBox.textContent = "Loading mock Product Passport Report...";
+  statusBox.textContent = "Analysing mock Product Passport Report data...";
   button.disabled = true;
   button.textContent = "Analysing...";
 
