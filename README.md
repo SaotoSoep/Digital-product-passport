@@ -4,15 +4,17 @@ Product Passport Agent is a small MVP web app for checking what a fashion produc
 
 Users paste a product URL from a retailer such as Zara, H&M, Uniqlo, Zalando, or ASOS, and the app returns a structured Product Passport Report. The report is consumer-facing and independent. It is not an official brand-issued Digital Product Passport.
 
-## Current demo mode
+## Current MVP mode
 
-The current UI is configured as a mock-data-only Product Passport Agent workflow for review purposes. Submitting a URL validates the input and renders a static example Product Passport Report without performing live scraping or calling the analysis endpoint.
+The current UI creates a saved draft Product Passport record from a submitted product URL. The backend fetches publicly visible product page HTML, generates an evidence-aware report, stores the draft in a local SQLite database, and returns the saved passport record to the browser.
 
 ## What it does
 
 - Fetches a submitted product URL server-side
 - Reads publicly visible HTML from the product page
 - Extracts basic signals such as page title, meta description, visible product-like text, material wording, sustainability-related wording, and care-related wording
+- Stores a draft passport record with status, product metadata, report JSON, snapshot JSON, and timestamps
+- Supports listing, reading, updating, publishing, and reading published passports by public id
 - Returns a structured report that clearly separates:
   - brand claim
   - public evidence visible on the page
@@ -20,7 +22,7 @@ The current UI is configured as a mock-data-only Product Passport Agent workflow
 
 ## Product Passport Report structure
 
-The current Product Passport Report output is mock-data-only and is meant to show the expected report shape for review.
+The current Product Passport Report output is generated from visible page evidence and stored as a draft passport.
 
 - Product summary: a short, plain-language overview of the item.
 - Materials: the main materials explained in simple words.
@@ -36,7 +38,7 @@ Missing or unverifiable information should be shown explicitly and not invented.
 
 - No authentication
 - No payments
-- No database
+- Local SQLite persistence for MVP records
 - No browser extension logic
 - No broad search or certification lookup
 - No retailer-specific scraping layer yet
@@ -47,9 +49,14 @@ Missing or unverifiable information should be shown explicitly and not invented.
 - Static frontend in `public/`
 - Minimal Node server in `server.js`
 - Analysis logic in `src/analyzer.js`
+- Passport service in `src/passports.js`
+- SQLite storage adapter in `src/lib/storage/sqlite.js`
+- D1/SQLite-compatible schema in `db/schema.sql` and `db/migrations/`
 - Netlify Function entrypoint in `netlify/functions/analyze.js`
 
 ## Local development
+
+The local passport storage adapter uses Node's built-in SQLite support. Use Node 24 or newer for the local backend workflow.
 
 Run the local server:
 
@@ -63,13 +70,32 @@ Open:
 http://localhost:3000
 ```
 
+The local database is created automatically at:
+
+```text
+data/product-passports.sqlite
+```
+
+## Backend API
+
+- `GET /api/health` checks that the backend is available.
+- `POST /api/passports` creates a saved draft passport from `{ "productUrl": "https://..." }`.
+- `GET /api/passports` lists recent passports. Optional query params: `status`, `limit`.
+- `GET /api/passports/:id` returns a saved passport.
+- `PATCH /api/passports/:id` updates editable metadata such as `productName`, `brand`, or `status`.
+- `POST /api/passports/:id/publish` marks a passport as published and assigns a public id.
+- `GET /api/public/passports/:publicId` returns a published passport by public id.
+- `POST /api/analyze` remains available as the raw analysis endpoint.
+
 ## Deployment
 
-The project is deployed on Netlify and uses:
+The existing Netlify deployment path still uses:
 
 - Publish directory: `public`
 - Functions directory: `netlify/functions`
 - Endpoint: `/api/analyze`
+
+The new passport lifecycle backend is currently wired into the local Node server first. Its schema is SQLite/D1-compatible so it can be moved to Sites/D1 when the hosting target is finalized.
 
 ## Current limitations
 

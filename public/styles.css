@@ -335,6 +335,72 @@ button:disabled {
   color: var(--low);
 }
 
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: rgba(45, 58, 49, 0.08);
+  color: var(--text);
+}
+
+.status-found {
+  background: rgba(45, 106, 79, 0.14);
+  color: var(--success);
+}
+
+.status-not_found {
+  background: rgba(122, 90, 22, 0.16);
+  color: var(--warn);
+}
+
+.status-unavailable,
+.status-fallback {
+  background: rgba(154, 77, 62, 0.14);
+  color: var(--low);
+}
+
+.evidence-item {
+  display: grid;
+  gap: 8px;
+}
+
+.evidence-found {
+  border-color: rgba(45, 106, 79, 0.24);
+}
+
+.evidence-not_found,
+.evidence-unavailable {
+  border-color: rgba(122, 90, 22, 0.24);
+}
+
+.evidence-meta,
+.evidence-summary,
+.fallback-note,
+.report-summary {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.fallback-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.fallback-block {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
 .score {
   font-size: 2.6rem;
   line-height: 1;

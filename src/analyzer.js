@@ -3,28 +3,40 @@ const {
   createFailedProductPageSnapshot,
   extractProductPageSnapshot,
 } = require("./lib/product-page/snapshot");
+const { buildProductPageEvidence } = require("./lib/product-passport/evidence");
 
 const materialKeywords = [
   "organic cotton",
+  "biologisch katoen",
   "recycled polyester",
+  "gerecycled polyester",
   "polyamide",
   "elastane",
   "polyester",
   "viscose",
   "cotton",
+  "katoen",
   "linen",
+  "linnen",
   "wool",
+  "wol",
   "nylon",
   "leather",
+  "leer",
 ];
 
 const sustainabilityKeywords = [
   "sustainability",
+  "duurzaamheid",
   "sustainable",
+  "duurzaam",
   "responsible",
+  "verantwoord",
   "conscious",
   "recycled",
+  "gerecycled",
   "organic",
+  "biologisch",
   "lower impact",
   "traceable",
   "certified",
@@ -37,8 +49,13 @@ const careKeywords = [
   "tumble dry",
   "dry clean",
   "washing",
+  "wassen",
+  "wasvoorschrift",
+  "onderhoud",
   "bleach",
+  "bleken",
   "iron",
+  "strijken",
   "wash",
   "30°c",
   "40°c",
@@ -109,7 +126,7 @@ function splitIntoSnippets(text) {
   return text
     .split(/(?<=[.!?])\s+|\s{2,}/)
     .map((snippet) => snippet.trim())
-    .filter((snippet) => snippet.length >= 20);
+    .filter((snippet) => snippet.length >= 20 && snippet.length <= 320);
 }
 
 function findKeywordMatches(snippets, keywords) {
@@ -292,7 +309,7 @@ function buildSources(productUrl, extracted) {
 
   sources.push({
     type: "MVP limitation",
-    label: "No broad web search, certification lookup, or independent source verification in this version",
+    label: "No broad web search, external registry lookup, or independent source check in this version",
   });
 
   return sources;
@@ -319,12 +336,117 @@ function buildUnknowns(materialMatches, originMatches, careMatches, claims) {
     unknowns.push("No clear sustainability claims were found on the fetched page text.");
   }
 
-  unknowns.push("Factory, supplier, and third-party certification evidence were not independently verified.");
+  unknowns.push("Factory, supplier, and third-party evidence were not independently checked.");
 
   return unknowns;
 }
 
+function isUsefulFallbackValue(value) {
+  const cleaned = cleanText(value);
+
+  if (!cleaned) {
+    return false;
+  }
+
+  return !/^(material not|not found|no clear|check the garment|the page could not|information not)/i
+    .test(cleaned);
+}
+
+function collectReportFallbacks(report) {
+  const fallbackByKey = {};
+
+  if (isUsefulFallbackValue(report.materialExplained && report.materialExplained.rawMaterial)) {
+    fallbackByKey.materialComposition = {
+      values: [report.materialExplained.rawMaterial],
+      sourceLabel: "MVP keyword fallback",
+      note: "Derived from the report's lightweight keyword analysis, not from the normalized product-page field.",
+    };
+  }
+
+  const claimValues = (report.sustainabilityClaimsFound || [])
+    .map((claim) => claim.brandClaim || claim.claim)
+    .filter(isUsefulFallbackValue);
+
+  if (claimValues.length > 0) {
+    fallbackByKey.sustainabilityClaims = {
+      values: claimValues,
+      sourceLabel: "MVP claim fallback",
+      note: "Shown separately because the report detected claim-like wording outside the normalized snapshot field.",
+    };
+  }
+
+  if (isUsefulFallbackValue(report.washingCareAdvice && report.washingCareAdvice.summary)) {
+    fallbackByKey.careText = {
+      values: [report.washingCareAdvice.summary],
+      sourceLabel: "MVP care fallback",
+      note: "Derived from the report's lightweight care-text scan, not from the normalized product-page field.",
+    };
+  }
+
+  return fallbackByKey;
+}
+
+function withProductPageEvidence(report, productPageSnapshot) {
+  return {
+    ...report,
+    productPageEvidence: buildProductPageEvidence(
+      productPageSnapshot,
+      collectReportFallbacks(report)
+    ),
+  };
+}
+
 function buildPartialReport(productUrl, retailer, note, productPageSnapshot) {
+  const report = {
+    note,
+    productSummary: `${retailer} product link received, but the page content could not be reliably read. This is a limited fallback report.`,
+    materialExplained: {
+      rawMaterial: "Material not confirmed",
+      simpleExplanation: "The product page could not be parsed reliably enough to confirm material information.",
+      confidence: "Low",
+    },
+    sustainabilityClaimsFound: [],
+    productionOriginTransparency: {
+      status: "Not found",
+      detail: "The page could not be reliably read for origin or traceability information.",
+      confidence: "Low",
+    },
+    washingCareAdvice: {
+      summary: "Check the garment care label directly before washing. This report could not confirm page-level care instructions.",
+      confidence: "Low",
+    },
+    transparencyScore: {
+      score: 10,
+      outOf: 100,
+      rationale: "Low score because the product page could not be reliably extracted.",
+    },
+    claimStrengthScore: {
+      score: 10,
+      outOf: 100,
+      rationale: "No claim strength can be established when the page content is not reliably available.",
+    },
+    conclusion: "No reliable product-level transparency assessment could be made from the fetched page content.",
+    sources: [
+      {
+        type: "Product URL submitted by user",
+        label: productUrl,
+      },
+      {
+        type: "Extraction note",
+        label: productPageSnapshot
+          ? productPageSnapshot.extractionNotes.join("; ")
+          : note,
+      },
+    ],
+    unknowns: [
+      "Exact product description",
+      "Material composition",
+      "Origin and manufacturing details",
+      "Care instructions",
+      "Any sustainability claim visible on the page",
+    ],
+  };
+
   return {
     metadata: {
       generatedAt: new Date().toISOString(),
@@ -333,55 +455,7 @@ function buildPartialReport(productUrl, retailer, note, productPageSnapshot) {
       retailer,
       productPageSnapshot,
     },
-    report: {
-      note,
-      productSummary: `${retailer} product link received, but the page content could not be reliably read. This is a limited fallback report.`,
-      materialExplained: {
-        rawMaterial: "Material not confirmed",
-        simpleExplanation: "The product page could not be parsed reliably enough to confirm material information.",
-        confidence: "Low",
-      },
-      sustainabilityClaimsFound: [],
-      productionOriginTransparency: {
-        status: "Not found",
-        detail: "The page could not be reliably read for origin or traceability information.",
-        confidence: "Low",
-      },
-      washingCareAdvice: {
-        summary: "Check the garment care label directly before washing. This report could not confirm page-level care instructions.",
-        confidence: "Low",
-      },
-      transparencyScore: {
-        score: 10,
-        outOf: 100,
-        rationale: "Low score because the product page could not be reliably extracted.",
-      },
-      claimStrengthScore: {
-        score: 10,
-        outOf: 100,
-        rationale: "No claim strength can be established when the page content is not reliably available.",
-      },
-      conclusion: "No reliable product-level transparency assessment could be made from the fetched page content.",
-      sources: [
-        {
-          type: "Product URL submitted by user",
-          label: productUrl,
-        },
-        {
-          type: "Extraction note",
-          label: productPageSnapshot
-            ? productPageSnapshot.extractionNotes.join("; ")
-            : note,
-        },
-      ],
-      unknowns: [
-        "Exact product description",
-        "Material composition",
-        "Origin and manufacturing details",
-        "Care instructions",
-        "Any sustainability claim visible on the page",
-      ],
-    },
+    report: withProductPageEvidence(report, productPageSnapshot),
   };
 }
 
@@ -488,6 +562,53 @@ async function analyzeProductUrl(productUrl) {
     ? fallbackNote
     : undefined;
 
+  const report = {
+    note,
+    productSummary: cleanText(
+      [title, description, visibleProductText]
+        .filter(Boolean)
+        .join(" ")
+    ) || `${retailer} product page fetched, but only limited descriptive text was visible.`,
+    materialExplained: {
+      rawMaterial: primaryMaterial,
+      simpleExplanation: materialMatches.length > 0
+        ? materialExplanation(primaryMaterial)
+        : "No clear material wording was found in the fetched page text, so the composition remains uncertain.",
+      confidence: materialConfidence,
+    },
+    sustainabilityClaimsFound: claims,
+    productionOriginTransparency: {
+      status: originMatches.length > 0 ? "Found some visible origin-related wording" : "Not found",
+      detail: originMatches.length > 0
+        ? originMatches[0].snippet
+        : "No clear product-level country-of-origin, factory, or traceability text was found in the fetched page content.",
+      confidence: originMatches.length > 0 ? "Medium" : "Low",
+    },
+    washingCareAdvice: {
+      summary: careMatches.length > 0
+        ? careMatches[0].snippet
+        : "No clear care instructions were detected in the fetched page text. Check the garment label before washing.",
+      confidence: careMatches.length > 0 ? "Medium" : "Low",
+    },
+    transparencyScore: {
+      score: transparencyScore,
+      outOf: 100,
+      rationale: "This score reflects only what was visible on the fetched product page, without an external source check.",
+    },
+    claimStrengthScore: {
+      score: claimStrengthScore,
+      outOf: 100,
+      rationale: claims.length > 0
+        ? "Claims were found on the page, but they remain brand-provided information unless checked against independent evidence."
+        : "No clear sustainability claim text was found on the fetched page.",
+    },
+    conclusion: claims.length > 0
+      ? "Some claim-like wording was visible on the product page, but this MVP treats it as brand-provided information rather than external proof."
+      : "The fetched page provided limited transparency detail and no clearly extractable independent sustainability evidence.",
+    sources: buildSources(productUrl, extracted),
+    unknowns: buildUnknowns(materialMatches, originMatches, careMatches, claims),
+  };
+
   return {
     metadata: {
       generatedAt: new Date().toISOString(),
@@ -496,52 +617,7 @@ async function analyzeProductUrl(productUrl) {
       retailer,
       productPageSnapshot,
     },
-    report: {
-      note,
-      productSummary: cleanText(
-        [title, description, visibleProductText]
-          .filter(Boolean)
-          .join(" ")
-      ) || `${retailer} product page fetched, but only limited descriptive text was visible.`,
-      materialExplained: {
-        rawMaterial: primaryMaterial,
-        simpleExplanation: materialMatches.length > 0
-          ? materialExplanation(primaryMaterial)
-          : "No clear material wording was found in the fetched page text, so the composition remains uncertain.",
-        confidence: materialConfidence,
-      },
-      sustainabilityClaimsFound: claims,
-      productionOriginTransparency: {
-        status: originMatches.length > 0 ? "Found some visible origin-related wording" : "Not found",
-        detail: originMatches.length > 0
-          ? originMatches[0].snippet
-          : "No clear product-level country-of-origin, factory, or traceability text was found in the fetched page content.",
-        confidence: originMatches.length > 0 ? "Medium" : "Low",
-      },
-      washingCareAdvice: {
-        summary: careMatches.length > 0
-          ? careMatches[0].snippet
-          : "No clear care instructions were detected in the fetched page text. Check the garment label before washing.",
-        confidence: careMatches.length > 0 ? "Medium" : "Low",
-      },
-      transparencyScore: {
-        score: transparencyScore,
-        outOf: 100,
-        rationale: "This score reflects only what was visible on the fetched product page, without external verification.",
-      },
-      claimStrengthScore: {
-        score: claimStrengthScore,
-        outOf: 100,
-        rationale: claims.length > 0
-          ? "Claims were found on the page, but they remain brand claims unless independently verified."
-          : "No clear sustainability claim text was found on the fetched page.",
-      },
-      conclusion: claims.length > 0
-        ? "Some claim-like wording was visible on the product page, but this MVP treats it as brand-provided information rather than verified proof."
-        : "The fetched page provided limited transparency detail and no clearly extractable verified sustainability evidence.",
-      sources: buildSources(productUrl, extracted),
-      unknowns: buildUnknowns(materialMatches, originMatches, careMatches, claims),
-    },
+    report: withProductPageEvidence(report, productPageSnapshot),
   };
 }
 

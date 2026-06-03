@@ -10,9 +10,9 @@
     <main class="page">
       <section class="hero">
         <p class="eyebrow">Product Passport Agent</p>
-        <h1>Preview an independent Product Passport Report from visible fashion product page data.</h1>
+        <h1>Create a saved Product Passport draft from visible fashion product page data.</h1>
         <p class="intro">
-          Paste a fashion product URL to test a calm, evidence-aware report that shows known product details, sustainability claims, and what is still not publicly verifiable.
+          Paste a fashion product URL to create a backend-backed draft with known product details, sustainability claims, and what is still not publicly verifiable.
         </p>
       </section>
 
@@ -27,9 +27,9 @@
               placeholder="https://www.zara.com/..."
               required
             />
-            <button type="submit" id="submit-button">Analyse product</button>
+            <button type="submit" id="submit-button">Create draft passport</button>
           </div>
-          <p class="form-hint">This workflow reads publicly visible HTML from the submitted page and keeps missing fields explicit.</p>
+          <p class="form-hint">This workflow reads publicly visible HTML, stores a draft passport, and keeps missing fields explicit.</p>
         </form>
 
         <div id="status" class="status" aria-live="polite"></div>
@@ -38,7 +38,7 @@
       <section id="report" class="report hidden" aria-live="polite"></section>
 
       <p class="footer-note">
-        This report is an independent product report. It is not an official Digital Product Passport or a sustainability certification.
+        This MVP report summarizes visible product-page information. It is not a regulated product record or proof of sustainability.
       </p>
     </main>
 
