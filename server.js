@@ -4,9 +4,12 @@ const path = require("path");
 const { URL } = require("url");
 
 const { analyzeProductUrl } = require("./src/analyzer");
+const { safeHandlePassportApi } = require("./src/http/passport-api");
+const { SqlitePassportStore } = require("./src/lib/storage/sqlite");
 
 const publicDir = path.join(__dirname, "public");
 const port = process.env.PORT || 3000;
+const passportStore = new SqlitePassportStore();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -20,6 +23,11 @@ function sendJson(response, statusCode, payload) {
     "Content-Type": "application/json; charset=utf-8",
   });
   response.end(JSON.stringify(payload));
+}
+
+function sendApiResponse(response, apiResponse) {
+  response.writeHead(apiResponse.statusCode, apiResponse.headers);
+  response.end(apiResponse.body);
 }
 
 function serveStaticFile(requestPath, response) {
@@ -92,6 +100,32 @@ const server = http.createServer(async (request, response) => {
       });
     }
     return;
+  }
+
+  if (requestUrl.pathname.startsWith("/api/")) {
+    let body = {};
+
+    if (method === "POST" || method === "PATCH") {
+      try {
+        body = await collectRequestBody(request);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message || "Invalid request body" });
+        return;
+      }
+    }
+
+    const passportApiResponse = await safeHandlePassportApi({
+      method,
+      pathname: requestUrl.pathname,
+      body,
+      searchParams: requestUrl.searchParams,
+      store: passportStore,
+    });
+
+    if (passportApiResponse) {
+      sendApiResponse(response, passportApiResponse);
+      return;
+    }
   }
 
   if (method === "GET") {
