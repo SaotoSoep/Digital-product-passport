@@ -4,6 +4,7 @@
   "private": true,
   "description": "Minimal MVP for generating a product passport report from a fashion product URL.",
   "scripts": {
+    "test": "node --test",
     "start": "node server.js"
   }
 }

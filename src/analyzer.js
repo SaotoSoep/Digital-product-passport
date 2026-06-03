@@ -1,4 +1,8 @@
 const { URL } = require("url");
+const {
+  createFailedProductPageSnapshot,
+  extractProductPageSnapshot,
+} = require("./lib/product-page/snapshot");
 
 const materialKeywords = [
   "organic cotton",
@@ -113,7 +117,7 @@ function findKeywordMatches(snippets, keywords) {
 
   for (const keyword of keywords) {
     const hit = snippets.find((snippet) =>
-      snippet.toLowerCase().includes(keyword.toLowerCase())
+      keywordAppearsInText(snippet, keyword)
     );
 
     if (hit) {
@@ -125,6 +129,17 @@ function findKeywordMatches(snippets, keywords) {
   }
 
   return matches;
+}
+
+function keywordAppearsInText(text, keyword) {
+  const normalizedKeyword = keyword.toLowerCase();
+
+  if (/^[a-z0-9]+$/i.test(normalizedKeyword)) {
+    return new RegExp(`(^|[^a-z0-9])${escapeRegex(normalizedKeyword)}([^a-z0-9]|$)`, "i")
+      .test(text);
+  }
+
+  return text.toLowerCase().includes(normalizedKeyword);
 }
 
 function pickProductLikeText(snippets, pageTitle, metaDescription) {
@@ -309,13 +324,14 @@ function buildUnknowns(materialMatches, originMatches, careMatches, claims) {
   return unknowns;
 }
 
-function buildPartialReport(productUrl, retailer, note) {
+function buildPartialReport(productUrl, retailer, note, productPageSnapshot) {
   return {
     metadata: {
       generatedAt: new Date().toISOString(),
       analysisMode: "live-fetch-v1",
       productUrl,
       retailer,
+      productPageSnapshot,
     },
     report: {
       note,
@@ -353,7 +369,9 @@ function buildPartialReport(productUrl, retailer, note) {
         },
         {
           type: "Extraction note",
-          label: note,
+          label: productPageSnapshot
+            ? productPageSnapshot.extractionNotes.join("; ")
+            : note,
         },
       ],
       unknowns: [
@@ -414,12 +432,19 @@ async function analyzeProductUrl(productUrl) {
   const fallbackNote = "Could not reliably read the product page. This report is based on limited available data.";
 
   let html;
+  let productPageSnapshot;
 
   try {
     html = await fetchHtml(productUrl);
   } catch (error) {
-    return buildPartialReport(productUrl, retailer, fallbackNote);
+    productPageSnapshot = createFailedProductPageSnapshot(
+      productUrl,
+      error.message || "unable to fetch product page"
+    );
+    return buildPartialReport(productUrl, retailer, fallbackNote, productPageSnapshot);
   }
+
+  productPageSnapshot = extractProductPageSnapshot(html, productUrl);
 
   const extracted = {
     openGraphTitle: extractMetaContent(html, "property", "og:title"),
@@ -446,7 +471,7 @@ async function analyzeProductUrl(productUrl) {
   const pageReadable = Boolean(title || description || visibleProductText || snippets.length > 0);
 
   if (!pageReadable) {
-    return buildPartialReport(productUrl, retailer, fallbackNote);
+    return buildPartialReport(productUrl, retailer, fallbackNote, productPageSnapshot);
   }
 
   const primaryMaterial = materialMatches[0] ? materialMatches[0].keyword : "Material not clearly identified";
@@ -469,6 +494,7 @@ async function analyzeProductUrl(productUrl) {
       analysisMode: "live-fetch-v1",
       productUrl,
       retailer,
+      productPageSnapshot,
     },
     report: {
       note,

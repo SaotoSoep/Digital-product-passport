@@ -101,6 +101,22 @@ function renderClaims(claims) {
     .join("");
 }
 
+function renderVisibleSnippets(snippets, emptyLabel) {
+  const items = snippets && snippets.length > 0
+    ? snippets
+    : [emptyLabel];
+
+  return items
+    .map(
+      (snippet) => `
+        <li class="detail-item">
+          <p>${escapeHtml(snippet)}</p>
+        </li>
+      `
+    )
+    .join("");
+}
+
 function renderMissingInformation(items) {
   return items
     .map(
@@ -113,40 +129,115 @@ function renderMissingInformation(items) {
     .join("");
 }
 
-function renderReport(passport, submittedUrl) {
+function renderSnapshot(snapshot) {
+  if (!snapshot) {
+    return "";
+  }
+
+  const listItems = [
+    ["Status", snapshot.extractionStatus],
+    ["Page title", snapshot.pageTitle],
+    ["Canonical URL", snapshot.canonicalUrl],
+    ["Product name", snapshot.likelyProductName],
+    ["Brand", snapshot.likelyBrand],
+  ]
+    .map(
+      ([label, value]) => `
+        <li class="detail-item">
+          <p><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value || "not_found")}</p>
+        </li>
+      `
+    )
+    .join("");
+
+  const notes = (snapshot.extractionNotes || [])
+    .map((note) => `<li class="detail-item"><p>${escapeHtml(note)}</p></li>`)
+    .join("");
+
+  return `
+    <article class="card">
+      <h2>Product page snapshot</h2>
+      <ul class="detail-list">${listItems}</ul>
+      ${notes ? `<ul class="detail-list snapshot-notes">${notes}</ul>` : ""}
+    </article>
+  `;
+}
+
+function renderReport(analysis, submittedUrl) {
+  const passport = analysis.report || analysis;
+  const snapshot = analysis.metadata ? analysis.metadata.productPageSnapshot : null;
+  const productName = analysis.productName || snapshot?.likelyProductName || "Product name not found";
+  const brand = analysis.brand || snapshot?.likelyBrand || "Brand not found";
+  const materialSnippets = snapshot?.materialCompositionText || [];
+  const claimSnippets = snapshot?.sustainabilityClaimSnippets || [];
+  const careSnippets = snapshot?.careText || [];
+  const claims = passport.claims || passport.sustainabilityClaimsFound || [];
+
   reportContainer.innerHTML = `
     <div class="report-header">
       <div>
-        <p class="eyebrow">Mock report</p>
+        <p class="eyebrow">${snapshot ? "Evidence-aware report" : "Mock report"}</p>
         <h2 class="report-title">Product Passport Report</h2>
       </div>
       <div class="report-meta">
         <div><strong>Input URL:</strong> ${escapeHtml(submittedUrl)}</div>
-        <div><strong>Overall confidence:</strong> ${escapeHtml(passport.confidenceScore)}</div>
+        <div><strong>Extraction status:</strong> ${escapeHtml(snapshot?.extractionStatus || passport.confidenceScore || "Mock")}</div>
       </div>
     </div>
 
     <div class="grid">
       <article class="card">
         <h2>Product</h2>
-        <p><strong>Name:</strong> ${escapeHtml(passport.productName)}</p>
-        <p><strong>Brand:</strong> ${escapeHtml(passport.brand)}</p>
+        <p><strong>Name:</strong> ${escapeHtml(productName)}</p>
+        <p><strong>Brand:</strong> ${escapeHtml(brand)}</p>
+        ${passport.productSummary ? `<p>${escapeHtml(passport.productSummary)}</p>` : ""}
       </article>
 
       <article class="card">
         <h2>Materials</h2>
-        <ul class="detail-list">${renderMaterials(passport.materials)}</ul>
+        <ul class="detail-list">${
+          materialSnippets.length > 0
+            ? renderVisibleSnippets(materialSnippets, "Material information not found")
+            : passport.materials
+            ? renderMaterials(passport.materials)
+            : renderMaterials([
+                {
+                  name: passport.materialExplained?.rawMaterial || "Material not found",
+                  confidence: passport.materialExplained?.confidence || "Low",
+                },
+              ])
+        }</ul>
       </article>
 
       <article class="card">
         <h2>Claims</h2>
-        <ul class="detail-list">${renderClaims(passport.claims)}</ul>
+        <ul class="detail-list">${
+          claimSnippets.length > 0
+            ? renderVisibleSnippets(claimSnippets, "Sustainability claim text not found")
+            : claims.length > 0
+            ? renderClaims(claims)
+            : renderVisibleSnippets([], "Sustainability claim text not found")
+        }</ul>
+      </article>
+
+      <article class="card">
+        <h2>Care</h2>
+        <ul class="detail-list">${renderVisibleSnippets(careSnippets, "Care information not found")}</ul>
       </article>
 
       <article class="card">
         <h2>Missing information</h2>
-        <ul class="detail-list">${renderMissingInformation(passport.missingInformation)}</ul>
+        <ul class="detail-list">${
+          passport.missingInformation
+            ? renderMissingInformation(passport.missingInformation)
+            : renderMissingInformation((passport.unknowns || []).map((value) => ({
+                label: "Unknown",
+                value,
+              })))
+        }</ul>
       </article>
+
+      ${renderSnapshot(snapshot)}
     </div>
   `;
 
@@ -157,6 +248,23 @@ function getMockProductPassport() {
   return new Promise((resolve) => {
     window.setTimeout(() => resolve(mockProductPassportReport), 900);
   });
+}
+
+async function analyzeProduct(productUrl) {
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ productUrl }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(errorBody.error || "Unable to analyze the product URL.");
+  }
+
+  return response.json();
 }
 
 form.addEventListener("submit", async (event) => {
@@ -175,16 +283,19 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  statusBox.textContent = "Analysing mock Product Passport Report data...";
+  statusBox.textContent = "Fetching visible product page information...";
   button.disabled = true;
   button.textContent = "Analysing...";
 
   try {
+    const analysis = await analyzeProduct(productUrl);
+    renderReport(analysis, productUrl);
+    const status = analysis.metadata?.productPageSnapshot?.extractionStatus || "partial";
+    statusBox.textContent = `Product page analysis complete (${status}).`;
+  } catch (error) {
     const passport = await getMockProductPassport();
     renderReport(passport, productUrl);
-    statusBox.textContent = "Mock Product Passport Report ready for review.";
-  } catch (error) {
-    statusBox.textContent = error.message || "Unable to render the mock Product Passport Report.";
+    statusBox.textContent = `${error.message || "Unable to analyze the product URL."} Showing mock fallback report.`;
   } finally {
     button.disabled = false;
     button.textContent = "Analyse product";
