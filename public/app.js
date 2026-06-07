@@ -2,54 +2,42 @@ const form = document.getElementById("analysis-form");
 const input = document.getElementById("product-url");
 const button = document.getElementById("submit-button");
 const statusBox = document.getElementById("status");
-const reportContainer = document.getElementById("report");
+const stageList = document.getElementById("stage-list");
+const reportPanel = document.getElementById("report");
+const reportHeader = document.getElementById("report-header");
+const reportOverview = document.getElementById("report-overview");
+const reportBody = document.getElementById("report-body");
+const tabButtons = Array.from(document.querySelectorAll(".tab-button"));
+const exampleButtons = Array.from(document.querySelectorAll("[data-example-url]"));
 
-const mockProductPassportReport = {
-  productName: "Relaxed Organic Cotton Overshirt",
-  brand: "Northline Studio",
-  confidenceScore: "Medium",
-  materials: [
-    {
-      name: "Organic cotton",
-      percentage: "78%",
-      confidence: "High",
-    },
-    {
-      name: "Recycled polyester",
-      percentage: "22%",
-      confidence: "Medium",
-    },
-  ],
-  claims: [
-    {
-      claim: "Made with organic cotton",
-      evidenceLevel: "Brand claim on product page",
-      confidence: "Medium",
-    },
-    {
-      claim: "Contains recycled materials",
-      evidenceLevel: "Material composition mention",
-      confidence: "Medium",
-    },
-  ],
-  missingInformation: [
-    {
-      label: "Country of manufacture",
-      value: "Information not found",
-    },
-    {
-      label: "Factory or supplier details",
-      value: "Not publicly verifiable",
-    },
-    {
-      label: "Third-party certification reference",
-      value: "Information not found",
-    },
-  ],
-};
+const stages = [
+  "Read page",
+  "Extract product data",
+  "Analyze passport gaps",
+  "Check claims",
+  "Save draft passport",
+];
+
+const checkedEvidenceFields = [
+  ["productName", "Product name"],
+  ["brand", "Brand"],
+  ["productIdentifiers", "Product identifiers"],
+  ["colorVariant", "Color/variant"],
+  ["productDescription", "Description"],
+  ["materialComposition", "Material"],
+  ["sustainabilityClaims", "Sustainability claim"],
+  ["careText", "Care"],
+  ["supplierDetails", "Supplier/factory"],
+  ["productionOrigin", "Origin/manufacturing"],
+  ["certifications", "Certifications"],
+  ["durabilityClaims", "Durability in use"],
+];
+
+let currentModel = null;
+let activeTab = "overview";
 
 function escapeHtml(value) {
-  return String(value)
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -57,102 +45,141 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function badgeClass(confidence) {
-  return `badge ${String(confidence || "").toLowerCase()}`;
-}
-
-function evidenceStatusLabel(status) {
-  const labels = {
-    found: "Product page evidence",
-    not_found: "Not found",
-    unavailable: "Unavailable",
-    fallback: "Fallback",
-  };
-
-  return labels[status] || labels.unavailable;
-}
-
-function evidenceStatusClass(status) {
-  return `status-badge status-${status || "unavailable"}`;
-}
-
-function renderStatusBadge(status) {
-  return `<span class="${evidenceStatusClass(status)}">${escapeHtml(evidenceStatusLabel(status))}</span>`;
-}
-
-function evidenceValues(field) {
-  return field && Array.isArray(field.values)
-    ? field.values.filter(Boolean)
-    : [];
-}
-
-function firstEvidenceValue(field, fallback) {
-  const values = evidenceValues(field);
-  return values.length > 0 ? values[0] : fallback;
-}
-
-function renderFallbackBlock(fallback) {
-  if (!fallback || !Array.isArray(fallback.values) || fallback.values.length === 0) {
+function known(value) {
+  if (value === null || value === undefined) {
     return "";
   }
 
-  const values = fallback.values
-    .map((value) => `<p>${escapeHtml(value)}</p>`)
-    .join("");
-
-  return `
-    <div class="fallback-block">
-      <div class="detail-topline">
-        <span>${escapeHtml(fallback.sourceLabel || "Fallback report value")}</span>
-        ${renderStatusBadge("fallback")}
-      </div>
-      ${values}
-      ${fallback.note ? `<p class="muted">${escapeHtml(fallback.note)}</p>` : ""}
-    </div>
-  `;
+  const cleaned = String(value).trim();
+  return cleaned && cleaned !== "not_found" ? cleaned : "";
 }
 
-function renderEvidenceItem(field, emptyLabel) {
-  if (!field) {
-    return `
-      <li class="detail-item evidence-item evidence-unavailable">
-        <div class="detail-topline">
-          <span>${escapeHtml(emptyLabel || "Product page field")}</span>
-          ${renderStatusBadge("unavailable")}
-        </div>
-        <p>Product-page evidence is unavailable for this field.</p>
-      </li>
-    `;
+function normalizeStatus(status) {
+  const allowed = new Set(["found", "not_found", "fallback", "unavailable", "success", "partial", "failed"]);
+  return allowed.has(status) ? status : "unavailable";
+}
+
+function statusLabel(status) {
+  const labels = {
+    found: "Found",
+    not_found: "Not found",
+    fallback: "Fallback",
+    unavailable: "Unavailable",
+    success: "Success",
+    partial: "Partial",
+    failed: "Failed",
+  };
+
+  return labels[normalizeStatus(status)];
+}
+
+function statusBadge(status) {
+  const normalized = normalizeStatus(status);
+  return `<span class="status-badge status-${normalized}">${statusLabel(normalized)}</span>`;
+}
+
+function displayText(value, emptyText = "") {
+  return known(value) || known(emptyText);
+}
+
+function fieldValues(field) {
+  return field && Array.isArray(field.values)
+    ? field.values.map(known).filter(Boolean)
+    : [];
+}
+
+function fieldFallbackValues(field) {
+  const fallback = field && field.fallback;
+  return fallback && Array.isArray(fallback.values)
+    ? fallback.values.map(known).filter(Boolean)
+    : [];
+}
+
+function firstFieldValue(field, fallback) {
+  const values = fieldValues(field);
+  if (values.length > 0) {
+    return values[0];
   }
 
-  const values = evidenceValues(field);
-  const displayValues = values.length > 0
-    ? values
-    : [emptyLabel || field.note || "Information not found on the submitted product page."];
-  const sourceMeta = field.sourceUrl && field.extractedAt
-    ? `<p class="evidence-meta">Source: ${escapeHtml(field.sourceLabel)} - ${escapeHtml(field.sourceUrl)} - ${escapeHtml(field.extractedAt)}</p>`
-    : `<p class="evidence-meta">${escapeHtml(field.sourceLabel)}</p>`;
+  const fallbackValues = fieldFallbackValues(field);
+  if (fallbackValues.length > 0) {
+    return fallbackValues[0];
+  }
 
-  return `
-    <li class="detail-item evidence-item evidence-${escapeHtml(field.status)}">
-      <div class="detail-topline">
-        <span>${escapeHtml(field.label)}</span>
-        ${renderStatusBadge(field.status)}
-      </div>
-      ${displayValues.map((value) => `<p>${escapeHtml(value)}</p>`).join("")}
-      ${sourceMeta}
-      ${renderFallbackBlock(field.fallback)}
-    </li>
-  `;
+  return known(fallback);
 }
 
-function renderMockFallbackNotice() {
-  return `
-    <p class="muted fallback-note">
-      ${renderStatusBadge("fallback")}
-      Sample fallback content below was not extracted from the submitted product page.
-    </p>
-  `;
+function fieldDisplayValue(field, fallback) {
+  const values = fieldValues(field);
+  if (values.length > 0) {
+    return values.join(" ");
+  }
+
+  const fallbackValues = fieldFallbackValues(field);
+  if (fallbackValues.length > 0) {
+    return fallbackValues.join(" ");
+  }
+
+  return known(fallback);
+}
+
+function scoreValue(score) {
+  const numeric = Number(score && score.score);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function fallbackPassportReadiness(fields, evidenceFields) {
+  const readyFields = evidenceFields
+    .filter((item) => item.status === "found")
+    .map((item) => ({
+      key: item.key,
+      label: item.label,
+      value: fieldDisplayValue(fields[item.key], ""),
+      detail: "Found in normalized product-page evidence.",
+      source: fields[item.key]?.sourceLabel || "Submitted product page",
+    }))
+    .filter((item) => item.value);
+  const missingFields = evidenceFields
+    .filter((item) => item.status === "not_found" || item.status === "unavailable")
+    .map((item) => ({
+      key: item.key,
+      label: item.label,
+      detail: "Not found in the current product-page analysis.",
+    }));
+
+  return {
+    status: readyFields.length > 0 ? "partial" : "limited",
+    label: readyFields.length > 0 ? "Partial passport profile" : "Limited passport evidence",
+    summary: `${readyFields.length} passport-ready data group(s) found. ${missingFields.length} checked field(s) still need evidence.`,
+    readyFields,
+    missingFields,
+    warnings: [],
+    counts: {
+      ready: readyFields.length,
+      missing: missingFields.length,
+      warnings: 0,
+    },
+  };
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 function isValidProductUrl(value) {
@@ -164,267 +191,754 @@ function isValidProductUrl(value) {
   }
 }
 
-function renderMaterials(materials) {
-  return materials
-    .map(
-      (material) => `
-        <li class="detail-item">
-          <div class="detail-topline">
-            <span>${escapeHtml(material.name)}${material.percentage ? ` (${escapeHtml(material.percentage)})` : ""}</span>
-            <span class="${badgeClass(material.confidence)}">${escapeHtml(material.confidence)}</span>
-          </div>
+function setStatus(message, tone = "muted") {
+  statusBox.textContent = message;
+  statusBox.dataset.tone = tone;
+}
+
+function renderTextValue(value, emptyText) {
+  const cleaned = displayText(value);
+  const rendered = cleaned || displayText(emptyText);
+  return `<p${cleaned ? "" : " class=\"muted\""}>${escapeHtml(rendered)}</p>`;
+}
+
+function renderStages(activeIndex = -1, mode = "idle") {
+  stageList.innerHTML = stages
+    .map((stage, index) => {
+      let state = "pending";
+
+      if (mode === "complete") {
+        state = "done";
+      } else if (mode === "error") {
+        state = index < activeIndex ? "done" : index === activeIndex ? "error" : "pending";
+      } else if (mode === "running") {
+        state = index < activeIndex ? "done" : index === activeIndex ? "active" : "pending";
+      }
+
+      return `
+        <li class="stage-item ${state}">
+          <span class="stage-dot" aria-hidden="true"></span>
+          <span>${escapeHtml(stage)}</span>
         </li>
-      `
-    )
+      `;
+    })
     .join("");
 }
 
-function renderClaims(claims) {
-  return claims
-    .map(
-      (claim) => `
-        <li class="detail-item claim-item">
-          <div class="detail-topline">
-            <span>${escapeHtml(claim.claim)}</span>
-            <span class="${badgeClass(claim.confidence)}">${escapeHtml(claim.confidence)}</span>
-          </div>
-          <p class="muted"><strong>Source label:</strong> ${escapeHtml(claim.evidenceLevel)}</p>
-        </li>
-      `
-    )
-    .join("");
+function extractModel(response, submittedUrl) {
+  const storedPassport = response.passport || null;
+  const analysis = response.analysis || response;
+  const report = analysis.report || response.report || response;
+  const metadata = analysis.metadata || {};
+  const snapshot = storedPassport?.snapshot || metadata.productPageSnapshot || null;
+  const evidence = storedPassport?.report?.productPageEvidence || report.productPageEvidence || null;
+  const fields = evidence?.fields || {};
+  const productName = firstFieldValue(
+    fields.productName,
+    known(storedPassport?.productName) || known(snapshot?.likelyProductName) || "Product name not found"
+  );
+  const brand = firstFieldValue(
+    fields.brand,
+    known(storedPassport?.brand) || known(snapshot?.likelyBrand) || "Brand not found"
+  );
+  const retailer = known(storedPassport?.retailer) || known(metadata.retailer) || new URL(submittedUrl).hostname.replace(/^www\./, "");
+  const material = fieldDisplayValue(
+    fields.materialComposition,
+    known(report.materialExplained?.rawMaterial) || "Material not found"
+  );
+  const identifiers = fieldDisplayValue(
+    fields.productIdentifiers,
+    ""
+  );
+  const colorVariant = fieldDisplayValue(
+    fields.colorVariant,
+    ""
+  );
+  const productDescription = fieldDisplayValue(
+    fields.productDescription,
+    ""
+  );
+  const productSummary = known(report.productSummary);
+  const care = fieldDisplayValue(
+    fields.careText,
+    known(report.washingCareAdvice?.summary) || "Care information not found"
+  );
+  const origin = fieldDisplayValue(
+    fields.productionOrigin,
+    known(report.productionOriginTransparency?.detail) || "Origin/manufacturing information not found"
+  );
+  const supplierDetails = fieldDisplayValue(
+    fields.supplierDetails,
+    known(report.supplierTransparency?.detail) || "Supplier/factory information not found"
+  );
+  const certifications = fieldValues(fields.certifications);
+  const durabilityClaims = fieldValues(fields.durabilityClaims);
+  const claimValues = fieldValues(fields.sustainabilityClaims);
+  const fallbackClaims = fieldFallbackValues(fields.sustainabilityClaims);
+  const claims = Array.isArray(report.sustainabilityClaimsFound)
+    ? report.sustainabilityClaimsFound
+    : Array.isArray(report.claims)
+      ? report.claims
+      : [];
+  const unknowns = Array.isArray(report.unknowns)
+    ? report.unknowns
+    : Array.isArray(report.missingInformation)
+      ? report.missingInformation.map((item) => `${item.label}: ${item.value}`)
+      : [];
+  const extractionStatus = known(evidence?.extractionStatus) || known(snapshot?.extractionStatus) || known(storedPassport?.extractionStatus) || "partial";
+  const generatedAt = known(metadata.generatedAt) || known(storedPassport?.createdAt);
+  const sourceUrl = known(snapshot?.sourceUrl) || submittedUrl;
+  const brandInsight = report.brandInsight || {
+    status: "not_found",
+    brand,
+    summary: "No public brand context was returned by the current analyzer.",
+    sources: [],
+  };
+  const accessDiagnostics = report.accessDiagnostics || snapshot?.accessIssue || null;
+  const evidenceFields = checkedEvidenceFields.map(([key, label]) => ({
+    key,
+    label,
+    field: fields[key],
+    status: normalizeStatus(fields[key]?.status),
+  }));
+  const passportReadiness = report.passportReadiness ||
+    fallbackPassportReadiness(fields, evidenceFields);
+  const foundCount = evidenceFields.filter((item) => item.status === "found").length;
+  const checkedCount = evidenceFields.length;
+  const missingCount = evidenceFields.filter((item) => item.status === "not_found").length;
+
+  return {
+    submittedUrl,
+    storedPassport,
+    responseLinks: response.links || {},
+    report,
+    metadata,
+    snapshot,
+    evidence,
+    fields,
+    productName,
+    brand,
+    retailer,
+    material,
+    identifiers,
+    colorVariant,
+    productDescription,
+    care,
+    supplierDetails,
+    origin,
+    certifications,
+    durabilityClaims,
+    claims,
+    claimValues,
+    fallbackClaims,
+    unknowns,
+    extractionStatus,
+    generatedAt,
+    sourceUrl,
+    brandInsight,
+    accessDiagnostics,
+    passportReadiness,
+    evidenceFields,
+    foundCount,
+    checkedCount,
+    missingCount,
+    transparencyScore: scoreValue(report.transparencyScore),
+    claimScore: scoreValue(report.claimStrengthScore),
+    productSummary,
+    conclusion: known(report.conclusion),
+    originReport: report.productionOriginTransparency || null,
+    sources: Array.isArray(report.sources) ? report.sources : [],
+  };
 }
 
-function renderVisibleSnippets(snippets, emptyLabel) {
-  const items = snippets && snippets.length > 0
-    ? snippets
-    : [emptyLabel];
+function buildVerdict(model) {
+  const hasClaims = model.claimValues.length > 0 || model.fallbackClaims.length > 0 || model.claims.length > 0;
+  const extractionFailed = model.extractionStatus === "failed";
 
-  return items
-    .map(
-      (snippet) => `
-        <li class="detail-item">
-          <p>${escapeHtml(snippet)}</p>
-        </li>
-      `
-    )
-    .join("");
-}
-
-function renderMissingInformation(items) {
-  return items
-    .map(
-      (item) => `
-        <li class="detail-item unknown-item">
-          <p><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.value)}</p>
-        </li>
-      `
-    )
-    .join("");
-}
-
-function renderSnapshot(snapshot, evidence) {
-  if (!snapshot && !evidence) {
-    return "";
+  if (extractionFailed) {
+    return {
+      label: "Limited read",
+      tone: "risk",
+      summary: "The agent could not read enough visible page content to judge the product claims.",
+    };
   }
 
-  const fields = evidence
-    ? [
-        evidence.fields.pageTitle,
-        evidence.fields.canonicalUrl,
-        evidence.fields.productName,
-        evidence.fields.brand,
-      ]
-    : [
-        {
-          label: "Page title",
-          status: snapshot.pageTitle && snapshot.pageTitle !== "not_found" ? "found" : "not_found",
-          values: snapshot.pageTitle && snapshot.pageTitle !== "not_found" ? [snapshot.pageTitle] : [],
-          sourceLabel: "Submitted product page",
-          sourceUrl: snapshot.sourceUrl,
-          extractedAt: snapshot.extractionTimestamp,
-        },
-        {
-          label: "Canonical URL",
-          status: snapshot.canonicalUrl && snapshot.canonicalUrl !== "not_found" ? "found" : "not_found",
-          values: snapshot.canonicalUrl && snapshot.canonicalUrl !== "not_found" ? [snapshot.canonicalUrl] : [],
-          sourceLabel: "Submitted product page",
-          sourceUrl: snapshot.sourceUrl,
-          extractedAt: snapshot.extractionTimestamp,
-        },
-        {
-          label: "Product name",
-          status: snapshot.likelyProductName && snapshot.likelyProductName !== "not_found" ? "found" : "not_found",
-          values: snapshot.likelyProductName && snapshot.likelyProductName !== "not_found" ? [snapshot.likelyProductName] : [],
-          sourceLabel: "Submitted product page",
-          sourceUrl: snapshot.sourceUrl,
-          extractedAt: snapshot.extractionTimestamp,
-        },
-        {
-          label: "Brand",
-          status: snapshot.likelyBrand && snapshot.likelyBrand !== "not_found" ? "found" : "not_found",
-          values: snapshot.likelyBrand && snapshot.likelyBrand !== "not_found" ? [snapshot.likelyBrand] : [],
-          sourceLabel: "Submitted product page",
-          sourceUrl: snapshot.sourceUrl,
-          extractedAt: snapshot.extractionTimestamp,
-        },
-      ];
+  if (!hasClaims) {
+    return {
+      label: "No clear sustainability claim",
+      tone: "neutral",
+      summary: "The current scan did not find a clear sustainability claim on the product page.",
+    };
+  }
 
-  const listItems = fields
-    .map((field) => renderEvidenceItem(field, `${field.label} not found on product page`))
-    .join("");
+  if (model.claimScore < 45) {
+    return {
+      label: "Claim needs proof",
+      tone: "warning",
+      summary: "Claim-like wording was found, but the evidence is still mostly product-page text from the brand.",
+    };
+  }
 
-  const notes = ((evidence && evidence.notes) || (snapshot && snapshot.extractionNotes) || [])
-    .map((note) => `<li class="detail-item"><p>${escapeHtml(note)}</p></li>`)
-    .join("");
+  return {
+    label: "Brand claim found",
+    tone: "attention",
+    summary: "The page includes claim-like wording. Treat it as something to verify, not independent proof.",
+  };
+}
+
+function renderScore(label, score, rationale) {
+  return `
+    <div class="score-card">
+      <div class="score-topline">
+        <span>${escapeHtml(label)}</span>
+        <strong>${score}/100</strong>
+      </div>
+      <div class="score-track" aria-hidden="true">
+        <span style="width: ${score}%"></span>
+      </div>
+      ${rationale ? `<p>${escapeHtml(displayText(rationale))}</p>` : ""}
+    </div>
+  `;
+}
+
+function renderFieldBlock(title, field, emptyText) {
+  const status = normalizeStatus(field?.status);
+  const values = fieldValues(field);
+  const fallbackValues = fieldFallbackValues(field);
+  const sourceLabel = known(field?.sourceLabel);
+  const sourceUrl = known(field?.sourceUrl);
+  const extractedAt = formatDateTime(field?.extractedAt);
 
   return `
-    <article class="card">
-      <h2>Product page snapshot</h2>
-      ${evidence ? `<p class="evidence-summary">${escapeHtml(evidence.summary)}</p>` : ""}
-      <ul class="detail-list">${listItems}</ul>
-      ${notes ? `<ul class="detail-list snapshot-notes">${notes}</ul>` : ""}
+    <article class="evidence-row">
+      <div class="row-header">
+        <h3>${escapeHtml(title)}</h3>
+        ${statusBadge(status)}
+      </div>
+      <div class="row-content">
+        ${
+          values.length > 0
+            ? values.map((value) => `<p>${escapeHtml(displayText(value))}</p>`).join("")
+            : `<p class="muted">${escapeHtml(displayText(emptyText))}</p>`
+        }
+        ${
+          fallbackValues.length > 0
+            ? `<div class="fallback-strip">
+                <span>Fallback value</span>
+                ${fallbackValues.map((value) => `<p>${escapeHtml(displayText(value))}</p>`).join("")}
+                ${field?.fallback?.note ? `<p class="muted">${escapeHtml(displayText(field.fallback.note))}</p>` : ""}
+              </div>`
+            : ""
+        }
+      </div>
+      ${
+        sourceLabel || sourceUrl || extractedAt
+          ? `<p class="source-line">${escapeHtml([displayText(sourceLabel), sourceUrl, extractedAt].filter(Boolean).join(" · "))}</p>`
+          : ""
+      }
     </article>
   `;
 }
 
-function valueOrFallback(value, fallback) {
-  return value && value !== "not_found" ? value : fallback;
+function renderEvidenceChecklist(model) {
+  return `
+    <article class="evidence-checklist">
+      <div class="checklist-header">
+        <div>
+          <span class="mini-label">Checked on product page</span>
+          <h3>${model.foundCount}/${model.checkedCount} relevant fields found</h3>
+        </div>
+        <span class="coverage-pill">${model.missingCount} not found</span>
+      </div>
+      <div class="checklist-grid">
+        ${model.evidenceFields.map(({ label, status }) => `
+          <div class="checklist-item ${status}">
+            <span>${escapeHtml(label)}</span>
+            ${statusBadge(status)}
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
 }
 
-function renderReport(analysis, submittedUrl) {
-  const storedPassport = analysis.passport || null;
-  const analysisReport = analysis.analysis || analysis;
-  const passport = analysisReport.report || analysis.report || analysis;
-  const snapshot = storedPassport?.snapshot || (analysisReport.metadata ? analysisReport.metadata.productPageSnapshot : null);
-  const evidence = (storedPassport && storedPassport.report && storedPassport.report.productPageEvidence)
-    || passport.productPageEvidence
-    || null;
-  const fields = evidence ? evidence.fields : {};
-  const productName = firstEvidenceValue(
-    fields.productName,
-    valueOrFallback(storedPassport?.productName || analysis.productName || snapshot?.likelyProductName, "Product name not found on product page")
-  );
-  const brand = firstEvidenceValue(
-    fields.brand,
-    valueOrFallback(storedPassport?.brand || analysis.brand || snapshot?.likelyBrand, "Brand not found on product page")
-  );
-  const materialSnippets = snapshot?.materialCompositionText || [];
-  const claimSnippets = snapshot?.sustainabilityClaimSnippets || [];
-  const careSnippets = snapshot?.careText || [];
-  const claims = passport.claims || passport.sustainabilityClaimsFound || [];
-  const publicLink = analysis.links?.public
-    ? `<div><strong>Public API:</strong> ${escapeHtml(analysis.links.public)}</div>`
-    : "";
+function readinessTone(status) {
+  if (status === "useful") {
+    return "neutral";
+  }
 
-  reportContainer.innerHTML = `
-    <div class="report-header">
-      <div>
-        <p class="eyebrow">${evidence ? "Product-page evidence report" : storedPassport ? "Saved draft passport" : snapshot ? "Evidence-aware report" : "Mock fallback report"}</p>
-        <h2 class="report-title">Product Passport Report</h2>
+  if (status === "limited") {
+    return "risk";
+  }
+
+  return "warning";
+}
+
+function renderReadinessList(items, emptyText, itemClass = "") {
+  if (!Array.isArray(items) || items.length === 0) {
+    return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+  }
+
+  return `
+    <ul class="readiness-list ${itemClass}">
+      ${items.map((item) => `
+        <li>
+          <strong>${escapeHtml(displayText(item.label || item.key || "Passport item"))}</strong>
+          ${item.value ? `<span>${escapeHtml(displayText(item.value))}</span>` : ""}
+          ${item.detail ? `<p>${escapeHtml(displayText(item.detail))}</p>` : ""}
+        </li>
+      `).join("")}
+    </ul>
+  `;
+}
+
+function renderPassportReadiness(model) {
+  const readiness = model.passportReadiness || {};
+  const counts = readiness.counts || {};
+  const readyFields = Array.isArray(readiness.readyFields) ? readiness.readyFields : [];
+  const missingFields = Array.isArray(readiness.missingFields) ? readiness.missingFields : [];
+  const warnings = Array.isArray(readiness.warnings) ? readiness.warnings : [];
+
+  return `
+    <article class="passport-analysis">
+      <div class="analysis-heading">
+        <div>
+          <span class="mini-label">Product passport analysis</span>
+          <h3>${escapeHtml(displayText(readiness.label || "Passport readiness"))}</h3>
+          <p>${escapeHtml(displayText(readiness.summary || "The analyzer checked which product-passport fields are present and which still need proof."))}</p>
+        </div>
+        <span class="verdict-pill ${readinessTone(readiness.status)}">${escapeHtml(displayText(readiness.status || "partial"))}</span>
       </div>
-      <div class="report-meta">
-        <div><strong>Input URL:</strong> ${escapeHtml(submittedUrl)}</div>
-        ${storedPassport ? `<div><strong>Passport ID:</strong> ${escapeHtml(storedPassport.id)}</div>` : ""}
-        ${storedPassport ? `<div><strong>Status:</strong> ${escapeHtml(storedPassport.status)}</div>` : ""}
-        <div><strong>Extraction status:</strong> ${escapeHtml(evidence?.extractionStatus || snapshot?.extractionStatus || passport.confidenceScore || "Mock")}</div>
-        ${evidence ? `<div><strong>Evidence summary:</strong> ${escapeHtml(evidence.summary)}</div>` : ""}
-        ${publicLink}
+      <div class="readiness-metrics" aria-label="Passport readiness counts">
+        <div><strong>${Number(counts.ready || readyFields.length)}</strong><span>ready</span></div>
+        <div><strong>${Number(counts.missing || missingFields.length)}</strong><span>missing</span></div>
+        <div><strong>${Number(counts.warnings || warnings.length)}</strong><span>warnings</span></div>
       </div>
+      <div class="readiness-columns">
+        <section>
+          <h4>Usable for the passport</h4>
+          ${renderReadinessList(readyFields.slice(0, 6), "No passport-ready fields were found yet.")}
+        </section>
+        <section>
+          <h4>Still missing</h4>
+          ${renderReadinessList(missingFields.slice(0, 6), "No DPP gaps were returned by the analyzer.", "missing")}
+        </section>
+      </div>
+      ${
+        warnings.length > 0
+          ? `<section class="warning-strip">
+              <h4>Warnings</h4>
+              ${renderReadinessList(warnings, "No warnings.", "warnings")}
+            </section>`
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderClaimItem(claim) {
+  const claimText = known(claim.brandClaim) || known(claim.claim) || "Claim text not found";
+  const evidenceLevel = known(claim.evidenceLevel) || known(claim.publicEvidence) || "Visible page wording";
+  const confidence = known(claim.confidence) || "Medium";
+
+  return `
+    <article class="claim-row">
+      <div class="row-header">
+        <h3>${escapeHtml(claimText)}</h3>
+        <span class="confidence-badge">${escapeHtml(displayText(confidence))}</span>
+      </div>
+      <p>${escapeHtml(displayText(evidenceLevel))}</p>
+      ${claim.publicEvidence ? `<p class="muted">${escapeHtml(displayText(claim.publicEvidence))}</p>` : ""}
+    </article>
+  `;
+}
+
+function passportStatusLabel(status) {
+  const labels = {
+    draft: "Draft",
+    "analysis only": "Analysis only",
+    stored: "Stored",
+  };
+
+  return labels[status] || status;
+}
+
+function brandSourceLinkLabel(source) {
+  const topic = known(source.topic);
+  const label = known(source.label);
+  const sourceUrl = known(source.url).toLowerCase();
+
+  if (sourceUrl.includes("design-philosophy")) {
+    return "Design philosophy";
+  }
+
+  if (sourceUrl.includes("quality")) {
+    return "Quality";
+  }
+
+  if (sourceUrl.includes("about")) {
+    return "About";
+  }
+
+  return displayText(topic) || label || source.url;
+}
+
+function renderReportHeader(model) {
+  const verdict = buildVerdict(model);
+  const createdAt = formatDateTime(model.storedPassport?.createdAt || model.generatedAt);
+  const passportId = known(model.storedPassport?.id);
+  const status = known(model.storedPassport?.status) || (model.responseLinks.self ? "draft" : "analysis only");
+
+  reportHeader.innerHTML = `
+    <div>
+      <p class="section-kicker">${escapeHtml(model.retailer)}</p>
+      <h2>${escapeHtml(model.productName)}</h2>
+      <p>${escapeHtml(model.brand)}</p>
     </div>
-
-    <div class="grid">
-      <article class="card">
-        <h2>Product</h2>
-        ${evidence ? `
-          <ul class="detail-list">
-            ${renderEvidenceItem(fields.productName, "Product name not found on product page")}
-            ${renderEvidenceItem(fields.brand, "Brand not found on product page")}
-          </ul>
-        ` : `
-          ${renderMockFallbackNotice()}
-          <p><strong>Name:</strong> ${escapeHtml(productName)}</p>
-          <p><strong>Brand:</strong> ${escapeHtml(brand)}</p>
-        `}
-        ${passport.productSummary ? `<p class="muted report-summary"><strong>Report summary:</strong> ${escapeHtml(passport.productSummary)}</p>` : ""}
-      </article>
-
-      <article class="card">
-        <h2>Materials</h2>
-        ${evidence ? `
-          <ul class="detail-list">
-            ${renderEvidenceItem(fields.materialComposition, "Material/composition not found on product page")}
-          </ul>
-        ` : `
-          ${renderMockFallbackNotice()}
-          <ul class="detail-list">${
-            materialSnippets.length > 0
-              ? renderVisibleSnippets(materialSnippets, "Material information not found")
-              : passport.materials
-              ? renderMaterials(passport.materials)
-              : renderMaterials([
-                  {
-                    name: passport.materialExplained?.rawMaterial || "Material not found",
-                    confidence: passport.materialExplained?.confidence || "Low",
-                  },
-                ])
-          }</ul>
-        `}
-      </article>
-
-      <article class="card">
-        <h2>Claims</h2>
-        ${evidence ? `
-          <ul class="detail-list">
-            ${renderEvidenceItem(fields.sustainabilityClaims, "Sustainability claim text not found on product page")}
-          </ul>
-        ` : `
-          ${renderMockFallbackNotice()}
-          <ul class="detail-list">${
-            claimSnippets.length > 0
-              ? renderVisibleSnippets(claimSnippets, "Sustainability claim text not found")
-              : claims.length > 0
-              ? renderClaims(claims)
-              : renderVisibleSnippets([], "Sustainability claim text not found")
-          }</ul>
-        `}
-      </article>
-
-      <article class="card">
-        <h2>Care</h2>
-        ${evidence ? `
-          <ul class="detail-list">
-            ${renderEvidenceItem(fields.careText, "Care information not found on product page")}
-          </ul>
-        ` : `
-          ${renderMockFallbackNotice()}
-          <ul class="detail-list">${renderVisibleSnippets(careSnippets, "Care information not found")}</ul>
-        `}
-      </article>
-
-      <article class="card">
-        <h2>Missing information</h2>
-        <ul class="detail-list">${
-          passport.missingInformation
-            ? renderMissingInformation(passport.missingInformation)
-            : renderMissingInformation((passport.unknowns || []).map((value) => ({
-                label: "Unknown",
-                value,
-              })))
-        }</ul>
-      </article>
-
-      ${renderSnapshot(snapshot, evidence)}
+    <div class="result-meta">
+      <span class="verdict-pill ${verdict.tone}">${escapeHtml(verdict.label)}</span>
+      ${statusBadge(model.extractionStatus)}
+      ${passportId ? `<span>Draft ${escapeHtml(passportId)}</span>` : ""}
+      ${createdAt ? `<span>${escapeHtml(createdAt)}</span>` : ""}
+      <span>${escapeHtml(passportStatusLabel(status))}</span>
     </div>
   `;
-
-  reportContainer.classList.remove("hidden");
 }
 
-function getMockProductPassport() {
-  return new Promise((resolve) => {
-    window.setTimeout(() => resolve(mockProductPassportReport), 900);
+function renderReportOverview(model) {
+  const verdict = buildVerdict(model);
+  const transparencyRationale = known(model.report.transparencyScore?.rationale);
+  const claimRationale = known(model.report.claimStrengthScore?.rationale);
+  const coverageSummary = model.extractionStatus === "failed"
+    ? "Product-page extraction failed. Fallback values remain separated from product-page evidence."
+    : `Product-page extraction found ${model.foundCount} of ${model.checkedCount} relevant MVP fields. Fields that were not found are listed separately in the Gaps tab. Fallback values remain separated from product-page evidence.`;
+
+  reportOverview.innerHTML = `
+    <div class="verdict-card ${verdict.tone}">
+      <span class="mini-label">Agent read</span>
+      <h3>${escapeHtml(verdict.label)}</h3>
+      <p>${escapeHtml(verdict.summary)}</p>
+    </div>
+
+    ${renderScore("Transparency", model.transparencyScore, transparencyRationale)}
+    ${renderScore("Claim strength", model.claimScore, claimRationale)}
+
+    <div class="score-card">
+      <div class="score-topline">
+        <span>Page evidence</span>
+        <strong>${model.foundCount}/${model.checkedCount}</strong>
+      </div>
+      <p>${escapeHtml(coverageSummary)}</p>
+    </div>
+
+    <div class="score-card">
+      <div class="score-topline">
+        <span>Passport gaps</span>
+        <strong>${Number(model.passportReadiness?.counts?.missing || 0)}</strong>
+      </div>
+      <p>${escapeHtml(displayText(model.passportReadiness?.summary || "Product-passport readiness analysis was not returned."))}</p>
+    </div>
+
+    <div class="score-card">
+      <div class="score-topline">
+        <span>Brand context</span>
+        <strong>${escapeHtml(statusLabel(model.brandInsight.status))}</strong>
+      </div>
+      <p>${escapeHtml(displayText(model.brandInsight.summary))}</p>
+    </div>
+
+    ${
+      model.accessDiagnostics
+        ? `<div class="score-card">
+            <div class="score-topline">
+              <span>Access</span>
+              <strong>${escapeHtml(displayText(model.accessDiagnostics.type || "blocked"))}</strong>
+            </div>
+            <p>${escapeHtml(displayText(model.accessDiagnostics.detail))}</p>
+          </div>`
+        : ""
+    }
+
+    <dl class="passport-facts">
+      <div>
+        <dt>Input</dt>
+        <dd><a href="${escapeHtml(model.submittedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(model.submittedUrl)}</a></dd>
+      </div>
+      ${
+        model.responseLinks.public
+          ? `<div><dt>Public API</dt><dd>${escapeHtml(model.responseLinks.public)}</dd></div>`
+          : ""
+      }
+      <div>
+        <dt>Source read</dt>
+        <dd>${escapeHtml(model.sourceUrl)}</dd>
+      </div>
+    </dl>
+  `;
+}
+
+function renderOverviewTab(model) {
+  const primaryDescription = model.productDescription || model.productSummary;
+
+  return `
+    <section class="stack">
+      ${renderPassportReadiness(model)}
+      ${renderEvidenceChecklist(model)}
+      <div class="content-grid">
+      <article class="summary-block wide">
+        <span class="mini-label">Product-page description</span>
+        ${renderTextValue(primaryDescription, "No product description was found in the normalized page evidence.")}
+      </article>
+      <article class="summary-block">
+        <span class="mini-label">Product identifiers</span>
+        ${renderTextValue(model.identifiers, "Product, SKU, GTIN, or size identifiers were not found.")}
+      </article>
+      <article class="summary-block">
+        <span class="mini-label">Color / variant</span>
+        ${renderTextValue(model.colorVariant, "Color or selected variant data was not found.")}
+      </article>
+      <article class="summary-block">
+        <span class="mini-label">Material</span>
+        ${renderTextValue(model.material, "Material was not found on the product page.")}
+      </article>
+      <article class="summary-block">
+        <span class="mini-label">Care</span>
+        ${renderTextValue(model.care, "No clear care instructions were found.")}
+      </article>
+      <article class="summary-block">
+        <span class="mini-label">Supplier / factory</span>
+        ${renderTextValue(model.supplierDetails, "Supplier, factory, country, address, or employee count was not found.")}
+      </article>
+      <article class="summary-block">
+        <span class="mini-label">Origin/manufacturing</span>
+        ${renderTextValue(model.origin, "No clear origin or manufacturing information was found.")}
+      </article>
+      <article class="summary-block">
+        <span class="mini-label">Certifications</span>
+        ${renderTextValue(model.certifications.length ? model.certifications.join(" ") : "", "No certification or standard reference was found on the product page.")}
+      </article>
+      <article class="summary-block wide">
+        <span class="mini-label">Conclusion</span>
+        ${renderTextValue(model.conclusion, "The scan finished, but the current analyzer did not return a conclusion.")}
+      </article>
+      <article class="summary-block wide">
+        <span class="mini-label">Brand context</span>
+        ${renderTextValue(model.brandInsight.summary, "No public brand context was found.")}
+      </article>
+      </div>
+    </section>
+  `;
+}
+
+function renderClaimsTab(model) {
+  const evidenceRows = [
+    renderFieldBlock("Sustainability claim on product page", model.fields.sustainabilityClaims, "No sustainability claim was found in the normalized page evidence."),
+    renderFieldBlock("Certification or standard", model.fields.certifications, "No certification, standard, or third-party reference was found in the normalized page evidence."),
+  ];
+  const claimRows = model.claims.length > 0
+    ? model.claims.map(renderClaimItem).join("")
+    : `<article class="empty-row"><h3>No claim rows</h3><p>The analyzer did not return structured sustainability claims for this URL.</p></article>`;
+
+  return `
+    <section class="stack">
+      ${evidenceRows.join("")}
+      <div class="section-divider">
+        <span>Claim rows</span>
+      </div>
+      ${claimRows}
+    </section>
+  `;
+}
+
+function renderDurabilityTab(model) {
+  return `
+    <section class="stack">
+      ${renderFieldBlock("Material composition", model.fields.materialComposition, "Material composition was not found in the normalized page evidence.")}
+      ${renderFieldBlock("Care instructions", model.fields.careText, "Care instructions were not found in the normalized page evidence.")}
+      ${renderFieldBlock("Supplier and factory details", model.fields.supplierDetails, "Supplier, factory, country, address, or employee count was not found in the normalized page evidence.")}
+      ${renderFieldBlock("Origin and manufacturing", model.fields.productionOrigin, "Country, factory, supplier, or traceability detail was not found in the normalized page evidence.")}
+      ${renderFieldBlock("Durability, repair, or warranty", model.fields.durabilityClaims, "No direct claim about longevity, repair, wear, warranty, or test results was found on the product page.")}
+    </section>
+  `;
+}
+
+function renderBrandTab(model) {
+  const sources = Array.isArray(model.brandInsight.sources)
+    ? model.brandInsight.sources
+    : [];
+
+  if (sources.length === 0) {
+    return `
+      <section class="stack">
+        <article class="empty-row">
+          <h3>No public brand context found</h3>
+          <p>${escapeHtml(displayText(model.brandInsight.summary || "The analyzer did not find useful public brand pages from the submitted product page."))}</p>
+        </article>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="stack">
+      <article class="summary-block wide">
+        <span class="mini-label">Public brand context</span>
+        <p>${escapeHtml(displayText(model.brandInsight.summary))}</p>
+      </article>
+      ${sources.map((source) => `
+        <article class="brand-source">
+          <div class="row-header">
+            <h3>${escapeHtml(displayText(source.topic || "Brand context"))}</h3>
+            ${statusBadge(source.status === "unavailable" ? "unavailable" : "found")}
+          </div>
+          <p class="source-line">
+            <a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(brandSourceLinkLabel(source))}</a>
+          </p>
+          ${
+            Array.isArray(source.snippets) && source.snippets.length > 0
+              ? `<div class="brand-snippets">
+                  ${source.snippets.map((snippet) => `<p>${escapeHtml(snippet)}</p>`).join("")}
+                </div>`
+              : `<p class="muted">${escapeHtml(displayText(source.note || "No readable snippets were extracted from this candidate page."))}</p>`
+          }
+        </article>
+      `).join("")}
+    </section>
+  `;
+}
+
+function renderGapsTab(model) {
+  const readiness = model.passportReadiness || {};
+  const readinessMissingRows = Array.isArray(readiness.missingFields) && readiness.missingFields.length > 0
+    ? readiness.missingFields.map((item) => `<li><strong>${escapeHtml(displayText(item.label))}</strong>${item.detail ? `: ${escapeHtml(displayText(item.detail))}` : ""}</li>`).join("")
+    : "<li>No DPP gaps were returned.</li>";
+  const warningRows = Array.isArray(readiness.warnings) && readiness.warnings.length > 0
+    ? readiness.warnings.map((item) => `<li><strong>${escapeHtml(displayText(item.label))}</strong>${item.detail ? `: ${escapeHtml(displayText(item.detail))}` : ""}</li>`).join("")
+    : "<li>No data-quality warnings were returned.</li>";
+  const missingEvidenceRows = model.evidenceFields
+    .filter((item) => item.status === "not_found" || item.status === "unavailable")
+    .map((item) => `<li>${escapeHtml(item.label)}</li>`)
+    .join("");
+  const missingRows = model.unknowns.length > 0
+    ? model.unknowns.map((item) => `<li>${escapeHtml(displayText(item))}</li>`).join("")
+    : "<li>No explicit unknowns were returned.</li>";
+  const sourceRows = model.sources.length > 0
+    ? model.sources.map((source) => `
+        <article class="source-row">
+          <strong>${escapeHtml(displayText(source.type || "Source"))}</strong>
+          <span>${escapeHtml(displayText(source.label || ""))}</span>
+        </article>
+      `).join("")
+    : `<article class="source-row"><strong>Source</strong><span>${escapeHtml(model.submittedUrl)}</span></article>`;
+
+  return `
+    <section class="stack">
+      ${
+        model.accessDiagnostics
+          ? `<article class="gap-list">
+              <h3>Access diagnostic</h3>
+              <ul><li><strong>${escapeHtml(displayText(model.accessDiagnostics.type || "Access issue"))}</strong>: ${escapeHtml(displayText(model.accessDiagnostics.detail))}</li></ul>
+            </article>`
+          : ""
+      }
+      <article class="gap-list">
+        <h3>Product passport gaps</h3>
+        <ul>${readinessMissingRows}</ul>
+      </article>
+      <article class="gap-list">
+        <h3>Warnings and conflicts</h3>
+        <ul>${warningRows}</ul>
+      </article>
+      <article class="gap-list">
+        <h3>Checked but not found</h3>
+        <ul>${missingEvidenceRows || "<li>All checked product-page fields were found.</li>"}</ul>
+      </article>
+      <article class="gap-list">
+        <h3>Missing or unverified</h3>
+        <ul>${missingRows}</ul>
+      </article>
+      ${renderFieldBlock("Page title", model.fields.pageTitle, "Page title was not found.")}
+      ${renderFieldBlock("Canonical URL", model.fields.canonicalUrl, "Canonical URL was not found.")}
+      <div class="section-divider">
+        <span>Sources</span>
+      </div>
+      <div class="source-list">${sourceRows}</div>
+    </section>
+  `;
+}
+
+function renderActiveTab() {
+  if (!currentModel) {
+    return;
+  }
+
+  const tabRenderers = {
+    overview: renderOverviewTab,
+    claims: renderClaimsTab,
+    durability: renderDurabilityTab,
+    brand: renderBrandTab,
+    gaps: renderGapsTab,
+  };
+
+  reportBody.innerHTML = tabRenderers[activeTab](currentModel);
+  tabButtons.forEach((tabButton) => {
+    const selected = tabButton.dataset.tab === activeTab;
+    tabButton.classList.toggle("active", selected);
+    tabButton.setAttribute("aria-selected", String(selected));
   });
+}
+
+function renderReport(response, submittedUrl) {
+  currentModel = extractModel(response, submittedUrl);
+  activeTab = "overview";
+  renderReportHeader(currentModel);
+  renderReportOverview(currentModel);
+  renderActiveTab();
+  reportPanel.classList.remove("hidden");
+}
+
+function renderError(error, submittedUrl) {
+  currentModel = null;
+  reportHeader.innerHTML = `
+    <div>
+      <p class="section-kicker">Analysis stopped</p>
+      <h2>Could not create a Product Passport</h2>
+      <p>${escapeHtml(submittedUrl)}</p>
+    </div>
+    <div class="result-meta">
+      <span class="verdict-pill risk">Needs retry</span>
+    </div>
+  `;
+  reportOverview.innerHTML = `
+    <div class="verdict-card risk">
+      <span class="mini-label">Agent read</span>
+      <h3>No reliable result</h3>
+      <p>${escapeHtml(error.message || "Unable to analyze this URL.")}</p>
+    </div>
+  `;
+  reportBody.innerHTML = `
+    <article class="empty-row">
+      <h3>No fallback report was generated</h3>
+      <p>This MVP only shows extracted or returned evidence. It does not fill the report with sample product data when the live read fails.</p>
+    </article>
+  `;
+  reportPanel.classList.remove("hidden");
+}
+
+async function analyzeProduct(productUrl) {
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ productUrl }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(errorBody.error || "Unable to analyze the product URL.");
+  }
+
+  return response.json();
 }
 
 async function createProductPassport(productUrl) {
@@ -452,57 +966,68 @@ async function createProductPassport(productUrl) {
   return response.json();
 }
 
-async function analyzeProduct(productUrl) {
-  const response = await fetch("/api/analyze", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ productUrl }),
+tabButtons.forEach((tabButton) => {
+  tabButton.addEventListener("click", () => {
+    activeTab = tabButton.dataset.tab;
+    renderActiveTab();
   });
+});
 
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody.error || "Unable to analyze the product URL.");
-  }
-
-  return response.json();
-}
+exampleButtons.forEach((exampleButton) => {
+  exampleButton.addEventListener("click", () => {
+    input.value = exampleButton.dataset.exampleUrl || "";
+    input.focus();
+    setStatus("Example link added. Start the analysis when you are ready.", "active");
+  });
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const productUrl = input.value.trim();
-  reportContainer.classList.add("hidden");
+  reportPanel.classList.add("hidden");
 
   if (!productUrl) {
-    statusBox.textContent = "Enter a product URL to continue.";
+    setStatus("Enter a product URL to continue.", "warning");
+    renderStages(-1, "idle");
     return;
   }
 
   if (!isValidProductUrl(productUrl)) {
-    statusBox.textContent = "Enter a valid product URL starting with http:// or https://.";
+    setStatus("Enter a valid URL starting with http:// or https://.", "warning");
+    renderStages(-1, "idle");
     return;
   }
 
-  statusBox.textContent = "Creating a saved draft passport from visible product page information...";
+  setStatus("Agent is reading the product page...", "active");
   button.disabled = true;
-  button.textContent = "Creating...";
+  button.textContent = "Analyzing";
+
+  let activeStage = 0;
+  renderStages(activeStage, "running");
+  const stageTimer = window.setInterval(() => {
+    activeStage = Math.min(activeStage + 1, stages.length - 1);
+    renderStages(activeStage, "running");
+  }, 950);
 
   try {
     const analysis = await createProductPassport(productUrl);
+    window.clearInterval(stageTimer);
+    renderStages(stages.length - 1, "complete");
     renderReport(analysis, productUrl);
-    const status = analysis.passport?.extractionStatus || "partial";
-    const passportId = analysis.passport?.id ? ` Passport ID: ${analysis.passport.id}.` : "";
-    statusBox.textContent = analysis.fallbackMode === "analysis-only"
-      ? "Product page analysis complete. Passport storage is not available on this deployment yet."
-      : `Draft passport saved (${status}).${passportId}`;
+
+    const passportId = analysis.passport?.id ? ` Draft ${analysis.passport.id}.` : "";
+    const mode = analysis.fallbackMode === "analysis-only" ? "Analysis complete without passport storage." : "Draft passport saved.";
+    setStatus(`${mode}${passportId}`, "success");
   } catch (error) {
-    const passport = await getMockProductPassport();
-    renderReport(passport, productUrl);
-    statusBox.textContent = `${error.message || "Unable to create the product passport."} Showing mock fallback report.`;
+    window.clearInterval(stageTimer);
+    renderStages(activeStage, "error");
+    renderError(error, productUrl);
+    setStatus(error.message || "Unable to create the product passport.", "error");
   } finally {
     button.disabled = false;
-    button.textContent = "Create draft passport";
+    button.textContent = "Analyze";
   }
 });
+
+renderStages(-1, "idle");

@@ -35,9 +35,16 @@ export interface ProductPageEvidence {
     canonicalUrl: ProductPageEvidenceField;
     productName: ProductPageEvidenceField;
     brand: ProductPageEvidenceField;
+    productIdentifiers: ProductPageEvidenceField;
+    colorVariant: ProductPageEvidenceField;
+    productDescription: ProductPageEvidenceField;
     materialComposition: ProductPageEvidenceField;
     careText: ProductPageEvidenceField;
     sustainabilityClaims: ProductPageEvidenceField;
+    supplierDetails: ProductPageEvidenceField;
+    productionOrigin: ProductPageEvidenceField;
+    certifications: ProductPageEvidenceField;
+    durabilityClaims: ProductPageEvidenceField;
   };
   foundFields: string[];
   missingFields: string[];
@@ -54,8 +61,22 @@ export interface ProductPageSnapshot {
   canonicalUrl: ExtractedTextValue;
   likelyProductName: ExtractedTextValue;
   likelyBrand: ExtractedTextValue;
+  productIdentifiersText: string[];
+  colorText: string[];
+  productDescriptionText: string[];
   materialCompositionText: string[];
   careText: string[];
   sustainabilityClaimSnippets: string[];
+  supplierDetailText: string[];
+  originText: string[];
+  certificationText: string[];
+  durabilityClaimSnippets: string[];
+  structuredProductData: Record<string, unknown> | null;
+  accessIssue: {
+    type: string;
+    status?: number;
+    url?: string;
+    detail: string;
+  } | null;
   extractionNotes: string[];
 }

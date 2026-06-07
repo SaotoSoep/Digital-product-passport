@@ -5,43 +5,91 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Product Passport Agent</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
   </head>
   <body>
-    <main class="page">
-      <section class="hero">
-        <p class="eyebrow">Product Passport Agent</p>
-        <h1>Create a saved Product Passport draft from visible fashion product page data.</h1>
-        <p class="intro">
-          Paste a fashion product URL to create a backend-backed draft with known product details, sustainability claims, and what is still not publicly verifiable.
-        </p>
-      </section>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Product Passport Agent home">
+          <span class="brand-mark" aria-hidden="true">PP</span>
+          <span>Product Passport Agent</span>
+        </a>
+        <div class="topbar-status" aria-label="MVP status">
+          <span class="status-light" aria-hidden="true"></span>
+          Evidence-first MVP
+        </div>
+      </header>
 
-      <section class="panel">
-        <form id="analysis-form" class="analysis-form">
-          <label class="label" for="product-url">Fashion product URL</label>
-          <div class="input-row">
-            <input
-              id="product-url"
-              name="productUrl"
-              type="url"
-              placeholder="https://www.zara.com/..."
-              required
-            />
-            <button type="submit" id="submit-button">Create draft passport</button>
+      <main>
+        <section class="workbench" aria-label="Analyze a clothing product">
+          <section class="intake-panel">
+            <p class="section-kicker">Clothing product URL</p>
+            <h1>Check product claims against evidence.</h1>
+            <p class="lead">
+              Paste a product page. The agent separates visible product details, sustainability claims, material, care, brand context, and missing evidence.
+            </p>
+
+            <form id="analysis-form" class="analysis-form">
+              <label for="product-url">Product page</label>
+              <div class="input-row">
+                <input
+                  id="product-url"
+                  name="productUrl"
+                  type="url"
+                  inputmode="url"
+                  autocomplete="url"
+                  placeholder="https://www.retailer.com/product/..."
+                  required
+                />
+                <button type="submit" id="submit-button">Analyze</button>
+              </div>
+            </form>
+
+            <div class="example-links" aria-label="Example links">
+              <span>Examples</span>
+              <button type="button" data-example-url="http://localhost:3000/demo/organic-overshirt.html">Full demo product</button>
+              <button type="button" data-example-url="http://localhost:3000/demo/minimal-black-trousers.html">Limited demo product</button>
+              <button type="button" data-example-url="https://nl.oska.com/nl/products/detail/broek-622-katoen-linnen-streep-10260110512/?sizes=22&color=6540">OSKA live product</button>
+            </div>
+
+            <div id="status" class="status-message" aria-live="polite">
+              Ready for a product page.
+            </div>
+
+            <ol id="stage-list" class="stage-list" aria-label="Analysis progress"></ol>
+          </section>
+        </section>
+
+        <section id="report" class="report-shell hidden" aria-live="polite">
+          <div id="report-header" class="report-header"></div>
+
+          <div class="report-layout">
+            <aside id="report-overview" class="score-panel"></aside>
+
+            <section class="report-detail">
+              <div class="tabbar" role="tablist" aria-label="Report sections">
+                <button class="tab-button active" type="button" role="tab" aria-selected="true" data-tab="overview">
+                  Overview
+                </button>
+                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="claims">
+                  Claims
+                </button>
+                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="durability">
+                  Durability
+                </button>
+                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="brand">
+                  Brand
+                </button>
+                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="gaps">
+                  Gaps
+                </button>
+              </div>
+
+              <div id="report-body" class="report-body"></div>
+            </section>
           </div>
-          <p class="form-hint">This workflow reads publicly visible HTML, stores a draft passport, and keeps missing fields explicit.</p>
-        </form>
-
-        <div id="status" class="status" aria-live="polite"></div>
-      </section>
-
-      <section id="report" class="report hidden" aria-live="polite"></section>
-
-      <p class="footer-note">
-        This MVP report summarizes visible product-page information. It is not a regulated product record or proof of sustainability.
-      </p>
-    </main>
-
-    <script src="/app.js"></script>
+        </section>
+      </main>
+    </div>
   </body>
-  </html>
+</html>

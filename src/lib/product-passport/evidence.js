@@ -24,6 +24,24 @@ const FIELD_DEFINITIONS = [
     type: "single",
   },
   {
+    key: "productIdentifiers",
+    label: "Product identifiers",
+    snapshotKey: "productIdentifiersText",
+    type: "list",
+  },
+  {
+    key: "colorVariant",
+    label: "Color/variant",
+    snapshotKey: "colorText",
+    type: "list",
+  },
+  {
+    key: "productDescription",
+    label: "Product description",
+    snapshotKey: "productDescriptionText",
+    type: "list",
+  },
+  {
     key: "materialComposition",
     label: "Material/composition",
     snapshotKey: "materialCompositionText",
@@ -39,6 +57,30 @@ const FIELD_DEFINITIONS = [
     key: "sustainabilityClaims",
     label: "Sustainability claim text",
     snapshotKey: "sustainabilityClaimSnippets",
+    type: "list",
+  },
+  {
+    key: "supplierDetails",
+    label: "Supplier/factory details",
+    snapshotKey: "supplierDetailText",
+    type: "list",
+  },
+  {
+    key: "productionOrigin",
+    label: "Origin/manufacturing",
+    snapshotKey: "originText",
+    type: "list",
+  },
+  {
+    key: "certifications",
+    label: "Certification or standard references",
+    snapshotKey: "certificationText",
+    type: "list",
+  },
+  {
+    key: "durabilityClaims",
+    label: "Durability, repair, or warranty claims",
+    snapshotKey: "durabilityClaimSnippets",
     type: "list",
   },
 ];
@@ -121,7 +163,7 @@ function buildSummary(status, foundFields, missingFields, unavailableFields, fal
   }
 
   if (status === "success") {
-    return "Product-page extraction found the core page fields. Any fallback values remain separated from product-page evidence.";
+    return `Product-page extraction found ${foundFields.length} checked field(s). Missing fields are shown explicitly, and fallback values remain separated from product-page evidence.`;
   }
 
   const missingCount = missingFields.length + unavailableFields.length;
