@@ -33,6 +33,81 @@ const checkedEvidenceFields = [
   ["durabilityClaims", "Durability in use"],
 ];
 
+const dppFieldDescriptions = {
+  material_composition: {
+    why: "Needed to understand sustainability, durability and recyclability.",
+    action: "Check product specifications or ask the brand.",
+  },
+  manufacturing_location: {
+    why: "Helps evaluate supply-chain transparency and labour conditions.",
+    action: "Look for factory disclosures or contact the brand.",
+  },
+  certifications: {
+    why: "Independent certifications can verify sustainability claims.",
+    action: "Search for GOTS, OCS, GRS, Fairtrade or OEKO-TEX references.",
+  },
+  environmental_impact: {
+    why: "Shows carbon footprint, water use and other sustainability indicators.",
+    action: "Check whether the brand publishes impact reports.",
+  },
+  traceability: {
+    why: "Shows where materials and components originate.",
+    action: "Look for supplier or sourcing information.",
+  },
+  productIdentifiers: {
+    why: "Helps connect the passport to the exact product, size, colour, SKU, or selling variant.",
+    action: "Check the product specifications, URL, SKU details, or retailer product data.",
+  },
+  colorVariant: {
+    why: "Variant data helps avoid mixing evidence from different colours, sizes, or product versions.",
+    action: "Confirm the selected colour, size, and variant before using the passport data.",
+  },
+  materialComposition: {
+    why: "Needed to understand sustainability, durability and recyclability.",
+    action: "Check product specifications or ask the brand.",
+  },
+  careText: {
+    why: "Care guidance affects product lifetime, use-phase impact, and repair or maintenance decisions.",
+    action: "Check the care label, product specifications, or brand care guide.",
+  },
+  supplierDetails: {
+    why: "Supplier and factory details help evaluate supply-chain transparency and labour conditions.",
+    action: "Look for factory disclosures, supplier lists, or contact the brand.",
+  },
+  productionOrigin: {
+    why: "Helps evaluate supply-chain transparency and labour conditions.",
+    action: "Look for factory disclosures or contact the brand.",
+  },
+  durabilityClaims: {
+    why: "Durability information helps estimate use life, repairability, and whether quality claims are supported.",
+    action: "Look for warranty, repair, testing, or care-and-use evidence.",
+  },
+  rawMaterialProvenance: {
+    why: "Shows where fibres or feedstock originate before they become fabric.",
+    action: "Look for sourcing, farm, fibre, mill, or supplier information.",
+  },
+  supplyChainSteps: {
+    why: "Shows the production journey from fibre to finished garment.",
+    action: "Look for spinning, weaving, dyeing, finishing, transport, or supplier-stage disclosures.",
+  },
+  impactData: {
+    why: "Shows carbon footprint, water use and other sustainability indicators.",
+    action: "Check whether the brand publishes product impact data or impact reports.",
+  },
+  circularity: {
+    why: "End-of-life and circularity guidance helps users repair, reuse, resell, or recycle the product.",
+    action: "Look for repair guidance, take-back schemes, resale options, or recycling instructions.",
+  },
+  batchTraceability: {
+    why: "Batch or lot data helps trace the exact production run if quality or compliance questions arise.",
+    action: "Check labels, QR codes, product IDs, batch numbers, or shipment-level documentation.",
+  },
+  proofDocuments: {
+    why: "Proof documents help verify claims with audits, certificates, tests, or third-party evidence.",
+    action: "Ask for certificates, audit reports, test results, or independent verification documents.",
+  },
+};
+
 let currentModel = null;
 let activeTab = "overview";
 
@@ -492,6 +567,42 @@ function renderReadinessList(items, emptyText, itemClass = "") {
   `;
 }
 
+function renderMissingDppField(item) {
+  const label = displayText(item.label || item.key || "Passport item");
+  const detail = displayText(item.detail || "");
+  const info = dppFieldDescriptions[item.key] || null;
+
+  return `
+    <article class="missing-dpp-item">
+      <div class="missing-dpp-heading">
+        <span class="missing-icon" aria-hidden="true">!</span>
+        <h4>${escapeHtml(label)}</h4>
+      </div>
+      ${detail ? `<p class="missing-detail">${escapeHtml(detail)}</p>` : ""}
+      ${
+        info
+          ? `<div class="missing-guidance">
+              <p><strong>Why it matters:</strong> ${escapeHtml(info.why)}</p>
+              <p><strong>What you can do:</strong> ${escapeHtml(info.action)}</p>
+            </div>`
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderMissingDppFields(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return `<p class="muted">No DPP gaps were returned.</p>`;
+  }
+
+  return `
+    <div class="missing-dpp-list">
+      ${items.map(renderMissingDppField).join("")}
+    </div>
+  `;
+}
+
 function renderPassportReadiness(model) {
   const readiness = model.passportReadiness || {};
   const counts = readiness.counts || {};
@@ -808,9 +919,7 @@ function renderBrandTab(model) {
 
 function renderGapsTab(model) {
   const readiness = model.passportReadiness || {};
-  const readinessMissingRows = Array.isArray(readiness.missingFields) && readiness.missingFields.length > 0
-    ? readiness.missingFields.map((item) => `<li><strong>${escapeHtml(displayText(item.label))}</strong>${item.detail ? `: ${escapeHtml(displayText(item.detail))}` : ""}</li>`).join("")
-    : "<li>No DPP gaps were returned.</li>";
+  const readinessMissingFields = Array.isArray(readiness.missingFields) ? readiness.missingFields : [];
   const warningRows = Array.isArray(readiness.warnings) && readiness.warnings.length > 0
     ? readiness.warnings.map((item) => `<li><strong>${escapeHtml(displayText(item.label))}</strong>${item.detail ? `: ${escapeHtml(displayText(item.detail))}` : ""}</li>`).join("")
     : "<li>No data-quality warnings were returned.</li>";
@@ -841,8 +950,8 @@ function renderGapsTab(model) {
           : ""
       }
       <article class="gap-list">
-        <h3>Product passport gaps</h3>
-        <ul>${readinessMissingRows}</ul>
+        <h3>Missing DPP Information</h3>
+        ${renderMissingDppFields(readinessMissingFields)}
       </article>
       <article class="gap-list">
         <h3>Warnings and conflicts</h3>

@@ -141,6 +141,114 @@ test("adds normalized product-page evidence to the report using an OSKA-style fi
   }
 });
 
+test("uses OSKA public JSON brand pages when HTML brand pages are blocked", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const requestedUrl = String(url);
+
+    if (requestedUrl.includes("nl.oska.com/nl/products/detail")) {
+      return {
+        ok: true,
+        status: 200,
+        url: requestedUrl,
+        headers: {
+          get: () => "text/html; charset=utf-8",
+        },
+        text: async () => fixture("product-oska-style.html"),
+      };
+    }
+
+    if (requestedUrl.includes("www.oska.com/wp-json/wp/v2/pages/6920")) {
+      return {
+        ok: true,
+        status: 200,
+        url: requestedUrl,
+        headers: {
+          get: () => "application/json; charset=utf-8",
+        },
+        text: async () => JSON.stringify({
+          title: { rendered: "Quality" },
+          content: {
+            rendered: `
+              <p>We have a far-reaching concept of quality; above all, to us it means sustainability with respect to our products, customers, suppliers and employees.</p>
+              <p>We pass this quality awareness on to external partners and suppliers based on years of cooperation.</p>
+            `,
+          },
+        }),
+      };
+    }
+
+    if (requestedUrl.includes("www.oska.com/wp-json/wp/v2/pages/7179")) {
+      return {
+        ok: true,
+        status: 200,
+        url: requestedUrl,
+        headers: {
+          get: () => "application/json; charset=utf-8",
+        },
+        text: async () => JSON.stringify({
+          title: { rendered: "About us" },
+          content: {
+            rendered: "<p>From the beginning of our brand, we focused on each customer's personality and individuality instead of fast-paced fashion.</p>",
+          },
+        }),
+      };
+    }
+
+    if (requestedUrl.includes("www.oska.com/wp-json/wp/v2/posts")) {
+      return {
+        ok: true,
+        status: 200,
+        url: requestedUrl,
+        headers: {
+          get: () => "application/json; charset=utf-8",
+        },
+        text: async () => JSON.stringify([{
+          title: { rendered: "Sustainability" },
+          excerpt: {
+            rendered: "<p>To consume only what grows back: that is the original meaning of the term sustainability.</p>",
+          },
+        }]),
+      };
+    }
+
+    if (requestedUrl.includes("www.oska.com/")) {
+      return {
+        ok: true,
+        status: 200,
+        url: requestedUrl,
+        headers: {
+          get: () => "text/html; charset=utf-8",
+        },
+        text: async () => "<html><title>Just a moment...</title><body>Checking your browser before accessing the site.</body></html>",
+      };
+    }
+
+    return {
+      ok: false,
+      status: 404,
+      url: requestedUrl,
+      headers: {
+        get: () => "text/html; charset=utf-8",
+      },
+      text: async () => "<html><title>Not found</title></html>",
+    };
+  };
+
+  try {
+    const analysis = await analyzeProductUrl(
+      "https://nl.oska.com/nl/products/detail/broek-622-katoen-linnen-streep-10260110512/?sizes=9&color=6539"
+    );
+
+    assert.equal(analysis.report.brandInsight.status, "found");
+    assert.equal(analysis.report.brandInsight.brand, "OSKA");
+    assert(analysis.report.brandInsight.sources.some((source) => source.label === "OSKA quality"));
+    assert(analysis.report.brandInsight.sources.some((source) => source.note.includes("public JSON content")));
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("reports bot verification blocks and still fetches public brand context", async () => {
   const originalFetch = global.fetch;
   global.fetch = async (url) => {

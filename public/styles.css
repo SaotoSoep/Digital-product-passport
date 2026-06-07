@@ -881,6 +881,61 @@ button {
   line-height: 1.5;
 }
 
+.missing-dpp-list {
+  display: grid;
+  gap: 10px;
+}
+
+.missing-dpp-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.missing-dpp-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.missing-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.missing-dpp-item h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+
+.missing-detail,
+.missing-guidance p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.missing-guidance {
+  display: grid;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.missing-guidance strong {
+  color: var(--ink);
+}
+
 .source-list {
   display: grid;
   gap: 8px;

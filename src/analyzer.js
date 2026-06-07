@@ -6,6 +6,8 @@ const {
 const { buildProductPageEvidence } = require("./lib/product-passport/evidence");
 const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 
+const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
 const materialKeywords = [
   "organic cotton",
   "biologisch katoen",
@@ -150,6 +152,7 @@ function decodeHtmlEntities(text) {
     .replace(/&lsquo;|&rsquo;/gi, "'")
     .replace(/&ldquo;|&rdquo;|&bdquo;/gi, '"')
     .replace(/&ndash;|&mdash;/gi, "-")
+    .replace(/&hellip;/gi, "...")
     .replace(/&reg;/gi, "®")
     .replace(/&trade;/gi, "™")
     .replace(/&lt;/gi, "<")
@@ -669,6 +672,35 @@ function brandSpecificCandidates(brand) {
     ];
   }
 
+  if (normalized === "oska" || normalized.startsWith("oska ")) {
+    return [
+      {
+        url: "https://www.oska.com/category/sustainability/",
+        apiUrl: "https://www.oska.com/wp-json/wp/v2/posts?categories=3219&per_page=3",
+        label: "OSKA sustainability",
+        topic: "Sustainability",
+      },
+      {
+        url: "https://www.oska.com/quality/",
+        apiUrl: "https://www.oska.com/wp-json/wp/v2/pages/6920",
+        label: "OSKA quality",
+        topic: "Quality",
+      },
+      {
+        url: "https://www.oska.com/about/",
+        apiUrl: "https://www.oska.com/wp-json/wp/v2/pages/7179",
+        label: "OSKA about",
+        topic: "Brand background",
+      },
+      {
+        url: "https://www.oska.com/design-philosophy/",
+        apiUrl: "https://www.oska.com/wp-json/wp/v2/pages/6673",
+        label: "OSKA design philosophy",
+        topic: "Brand background",
+      },
+    ];
+  }
+
   return [];
 }
 
@@ -704,7 +736,7 @@ function guessedBrandCandidates(productUrl) {
 }
 
 function brandInsightCandidates(html, productUrl, brand) {
-  const seen = new Set();
+  const seenProductLinks = new Set();
   const parsedProductUrl = new URL(productUrl);
   const productHost = parsedProductUrl.hostname.replace(/^www\./, "");
   let brandOrigin = parsedProductUrl.origin;
@@ -718,12 +750,12 @@ function brandInsightCandidates(html, productUrl, brand) {
       const haystack = `${link.label} ${link.url}`.toLowerCase();
       const useful = brandInsightLinkKeywords.some((keyword) => haystack.includes(keyword));
 
-      if (!sameBrandHost || !useful || seen.has(link.url)) {
+      if (!sameBrandHost || !useful || seenProductLinks.has(link.url)) {
         return false;
       }
 
       brandOrigin = new URL(link.url).origin;
-      seen.add(link.url);
+      seenProductLinks.add(link.url);
       return true;
     })
     .map((link) => ({
@@ -737,15 +769,17 @@ function brandInsightCandidates(html, productUrl, brand) {
     ...guessedBrandCandidates(productUrl),
   ];
 
+  const seenCandidates = new Set();
+
   return candidates
     .filter((candidate) => {
-      if (seen.has(candidate.url)) {
+      if (seenCandidates.has(candidate.url)) {
         return false;
       }
-      seen.add(candidate.url);
+      seenCandidates.add(candidate.url);
       return true;
     })
-    .slice(0, 14);
+    .slice(0, 18);
 }
 
 function extractBrandInsightSnippets(html) {
@@ -784,6 +818,93 @@ function extractBrandInsightSnippets(html) {
     .slice(0, 3);
 }
 
+async function fetchJson(candidateUrl, timeoutMs = 4500) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(candidateUrl, {
+      signal: controller.signal,
+      headers: {
+        "accept": "application/json",
+        "user-agent": USER_AGENT,
+      },
+    });
+    const text = await response.text();
+
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
+
+    return JSON.parse(text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function renderedJsonContentToHtml(payload) {
+  const items = Array.isArray(payload) ? payload : [payload];
+
+  return items
+    .map((item) => [
+      item && item.title && item.title.rendered,
+      item && item.excerpt && item.excerpt.rendered,
+      item && item.content && item.content.rendered,
+      item && item.description,
+    ].filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join(" ");
+}
+
+async function fetchBrandInsightSource(candidate) {
+  try {
+    const snippets = extractBrandInsightSnippets(await fetchHtml(candidate.url, 4500));
+
+    if (snippets.length > 0 || !candidate.apiUrl) {
+      return { snippets };
+    }
+
+    const fallbackSnippets = extractBrandInsightSnippets(
+      renderedJsonContentToHtml(await fetchJson(candidate.apiUrl, 4500))
+    );
+
+    return {
+      snippets: fallbackSnippets,
+      note: fallbackSnippets.length > 0
+        ? "Readable public JSON content was used because the HTML page had no useful snippets."
+        : undefined,
+    };
+  } catch (htmlError) {
+    if (!candidate.apiUrl) {
+      throw htmlError;
+    }
+
+    try {
+      const payload = await fetchJson(candidate.apiUrl, 4500);
+      const snippets = extractBrandInsightSnippets(renderedJsonContentToHtml(payload));
+
+      if (snippets.length > 0) {
+        return {
+          snippets,
+          note: htmlError.accessIssue
+            ? "HTML page was blocked, so readable public JSON content was used instead."
+            : "Readable public JSON content was used instead of the HTML page.",
+        };
+      }
+    } catch (jsonError) {
+      throw htmlError;
+    }
+
+    throw htmlError;
+  }
+}
+
+function isReportableUnavailableSource(source) {
+  const note = String(source && source.note || "");
+
+  return !/Request failed with status 404/i.test(note);
+}
+
 async function fetchBrandInsight({ brand, productUrl, productHtml }) {
   const inferredBrand = brand && brand !== "not_found"
     ? brand
@@ -800,10 +921,10 @@ async function fetchBrandInsight({ brand, productUrl, productHtml }) {
   }
 
   const sources = (await Promise.all(
-    candidates.slice(0, 6).map(async (candidate) => {
+    candidates.slice(0, 10).map(async (candidate) => {
       try {
-        const html = await fetchHtml(candidate.url, 4500);
-        const snippets = extractBrandInsightSnippets(html);
+        const source = await fetchBrandInsightSource(candidate);
+        const snippets = source.snippets;
 
         if (snippets.length === 0) {
           return null;
@@ -814,6 +935,7 @@ async function fetchBrandInsight({ brand, productUrl, productHtml }) {
           label: candidate.label || candidate.topic,
           url: candidate.url,
           snippets,
+          note: source.note,
         };
       } catch (error) {
         return {
@@ -836,6 +958,7 @@ async function fetchBrandInsight({ brand, productUrl, productHtml }) {
   if (foundSources.length === 0) {
     const unavailableSources = sources
       .filter((source) => source.status === "unavailable")
+      .filter(isReportableUnavailableSource)
       .slice(0, 3);
 
     return {
@@ -1068,7 +1191,7 @@ async function fetchHtml(productUrl, timeoutMs = 10000) {
   try {
     const response = await fetch(productUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
       },
