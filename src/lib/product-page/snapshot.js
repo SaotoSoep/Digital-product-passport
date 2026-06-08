@@ -229,6 +229,7 @@ function decodeHtmlEntities(text) {
     .replace(/&trade;/gi, "™")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
 }
 
@@ -236,6 +237,29 @@ function cleanText(text) {
   return decodeHtmlEntities(String(text || ""))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function cleanProductDescriptionText(value) {
+  const text = cleanText(value)
+    .replace(/([a-z)])([A-Z][a-z])/g, "$1 $2")
+    .replace(/\s+(?=(Hook, bar|Machine wash|Inside leg|Model wears|Relaxed fit)\b)/g, " ");
+  const parts = text.split(/(?<=[.!?])\s+/);
+  const seen = new Set();
+  const uniqueParts = [];
+
+  for (const part of parts) {
+    const cleaned = cleanText(part);
+    const key = cleaned.toLowerCase();
+
+    if (!cleaned || seen.has(key)) {
+      continue;
+    }
+
+    uniqueParts.push(cleaned);
+    seen.add(key);
+  }
+
+  return uniqueParts.join(" ");
 }
 
 function stripTags(html) {
@@ -769,13 +793,13 @@ function normalizeEmbeddedProductData(candidate) {
     netWeight: cleanText(candidate.var_net_weight_desc || ""),
     weightUnit: cleanText(candidate.var_weight_unit || ""),
     season: cleanText(candidate.var_season_desc || ""),
-    productDescription: stripInlineHtml(
+    productDescription: cleanProductDescriptionText(stripInlineHtml(
       candidate.var_article_description_desc ||
       candidate.pr_long_description_desc ||
       candidate.descriptionHtml ||
       candidate.description ||
       ""
-    ),
+    )),
     materialComposition,
     supplierInfo,
     supplierDetails,
@@ -1297,7 +1321,7 @@ function extractProductPageSnapshot(html, sourceUrl, now = new Date()) {
     productDescriptionText: uniqueValues([
       ...productDescriptionText,
       ...findDescriptionSnippets(fieldSnippets),
-    ], 3),
+    ].map(cleanProductDescriptionText), 3),
     materialCompositionText: uniqueValues([
       ...embeddedMaterialComposition,
       ...compositionSnippets,

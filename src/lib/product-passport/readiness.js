@@ -77,7 +77,7 @@ function firstValue(fields, key) {
   return fieldValues(fields, key)[0] || "";
 }
 
-function addReadyField(readyFields, fields, key, label, detail) {
+function addReadyField(readyFields, fields, key, label, detail, maxValues = 3) {
   const values = fieldValues(fields, key);
 
   if (values.length === 0) {
@@ -87,7 +87,7 @@ function addReadyField(readyFields, fields, key, label, detail) {
   readyFields.push({
     key,
     label,
-    value: values.slice(0, 3).join(" "),
+    value: values.slice(0, maxValues).join(" "),
     detail,
     source: fields[key].sourceLabel,
   });
@@ -196,7 +196,7 @@ function buildReadyFields(evidence) {
 
   addReadyField(readyFields, fields, "productIdentifiers", "Commercial identifiers", "Product/SKU, GTIN, size-level identifiers, price, or season code were found.");
   addReadyField(readyFields, fields, "colorVariant", "Colour and variant", "Selected colour, colour reference, or category data was found.");
-  addReadyField(readyFields, fields, "productDescription", "Description and construction", "Description, fit, closure, or construction information was found.");
+  addReadyField(readyFields, fields, "productDescription", "Description and construction", "Description, fit, closure, or construction information was found.", 1);
   addReadyField(readyFields, fields, "materialComposition", "Material composition", "Composition data can be used as a passport starting point.");
   addReadyField(readyFields, fields, "careText", "Care and use", "Care instructions can support use-phase guidance.");
   addReadyField(readyFields, fields, "supplierDetails", "Supplier and factory details", "Supplier, factory, country, address, or employee count was found.");

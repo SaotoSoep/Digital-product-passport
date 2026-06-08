@@ -1,4 +1,6 @@
 const { URL } = require("url");
+require("dotenv").config({ quiet: true });
+const OpenAI = require("openai");
 const {
   createFailedProductPageSnapshot,
   extractProductPageSnapshot,
@@ -7,6 +9,62 @@ const { buildProductPageEvidence } = require("./lib/product-passport/evidence");
 const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+const OPENAI_MODEL = "gpt-4o-mini";
+const AI_PAGE_TEXT_LIMIT = 8000;
+
+const SYSTEM_PROMPT = `You are a product transparency analyst. You receive raw text scraped from a fashion or consumer product page and return a structured Product Passport Report as JSON.
+
+Rules:
+- Return ONLY valid JSON. No markdown fences, no explanation, no preamble, no trailing text.
+- Never invent information that is not present in the page text.
+- Clearly distinguish between: brand_claim (what the brand says), public_evidence (what is verifiable from the page), and unknown (not found or not verifiable).
+- Use confidence levels: "high", "medium", or "low" based only on what is explicitly stated on the page.
+- If a field cannot be determined, use null. Do not guess.
+- For sustainability_claims: if a claim has no supporting certificate or third-party verification on the page, set type to "unverified" and confidence to "low".
+- The transparency_score and claim_strength_score are integers from 0 to 100. Base them on how much verifiable information is present, not on how sustainable the product sounds.
+
+Return exactly this JSON structure, nothing else:
+{
+  "product_summary": "string - plain language, 2-3 sentences describing what this product is",
+  "brand": "string or null",
+  "product_name": "string or null",
+  "price": "string or null",
+  "materials": [
+    {
+      "name": "string - material name",
+      "percentage": "string or null - e.g. 80%",
+      "explanation": "string - plain language, what this material means for the consumer"
+    }
+  ],
+  "sustainability_claims": [
+    {
+      "claim": "string - exact or near-exact wording from the page",
+      "type": "product_level_certified | brand_level | unverified",
+      "evidence": "string - what on the page supports this claim, or null if nothing supports it",
+      "confidence": "high | medium | low"
+    }
+  ],
+  "origin": {
+    "country": "string or null",
+    "factory": "string or null",
+    "confidence": "high | medium | low"
+  },
+  "care_instructions": ["string"],
+  "transparency_score": {
+    "score": 0,
+    "reasoning": "string - short explanation of why this score was given"
+  },
+  "claim_strength_score": {
+    "score": 0,
+    "reasoning": "string - short explanation of why this score was given"
+  },
+  "missing_information": [
+    "string - one item per missing or unverifiable piece of information"
+  ],
+  "conclusion": "string - 2-3 sentences, consumer-friendly"
+}`;
+
+let openAiClient;
 
 const materialKeywords = [
   "organic cotton",
@@ -270,6 +328,147 @@ function cleanText(text) {
   return decodeHtmlEntities(String(text || ""))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getOpenAiClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  if (!openAiClient) {
+    openAiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+
+  return openAiClient;
+}
+
+function clampScore(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function titleCaseConfidence(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (normalized === "high") {
+    return "High";
+  }
+
+  if (normalized === "medium") {
+    return "Medium";
+  }
+
+  return "Low";
+}
+
+function asCleanArray(value) {
+  return Array.isArray(value)
+    ? value.map(cleanText).filter(Boolean)
+    : [];
+}
+
+function parseAiJson(raw) {
+  const cleaned = String(raw || "")
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  return JSON.parse(cleaned);
+}
+
+function normalizeAiReport(value) {
+  const report = value && typeof value === "object" ? value : {};
+  const origin = report.origin && typeof report.origin === "object" ? report.origin : {};
+  const transparencyScore = report.transparency_score && typeof report.transparency_score === "object"
+    ? report.transparency_score
+    : {};
+  const claimStrengthScore = report.claim_strength_score && typeof report.claim_strength_score === "object"
+    ? report.claim_strength_score
+    : {};
+  const materials = Array.isArray(report.materials)
+    ? report.materials
+        .filter((material) => material && typeof material === "object")
+        .map((material) => ({
+          name: cleanText(material.name),
+          percentage: material.percentage === null ? null : cleanText(material.percentage),
+          explanation: cleanText(material.explanation),
+        }))
+        .filter((material) => material.name)
+    : [];
+  const sustainabilityClaims = Array.isArray(report.sustainability_claims)
+    ? report.sustainability_claims
+        .filter((claim) => claim && typeof claim === "object")
+        .map((claim) => ({
+          claim: cleanText(claim.claim),
+          type: cleanText(claim.type) || "unverified",
+          evidence: claim.evidence === null ? null : cleanText(claim.evidence),
+          confidence: titleCaseConfidence(claim.confidence),
+        }))
+        .filter((claim) => claim.claim)
+    : [];
+  const missingInformation = asCleanArray(report.missing_information);
+
+  return {
+    product_summary: cleanText(report.product_summary),
+    brand: report.brand === null ? null : cleanText(report.brand),
+    product_name: report.product_name === null ? null : cleanText(report.product_name),
+    price: report.price === null ? null : cleanText(report.price),
+    materials,
+    sustainability_claims: sustainabilityClaims,
+    origin: {
+      country: origin.country === null ? null : cleanText(origin.country),
+      factory: origin.factory === null ? null : cleanText(origin.factory),
+      confidence: titleCaseConfidence(origin.confidence),
+    },
+    care_instructions: asCleanArray(report.care_instructions),
+    transparency_score: {
+      score: clampScore(transparencyScore.score),
+      reasoning: cleanText(transparencyScore.reasoning),
+    },
+    claim_strength_score: {
+      score: clampScore(claimStrengthScore.score),
+      reasoning: cleanText(claimStrengthScore.reasoning),
+    },
+    missing_information: materials.length === 0 && !missingInformation.some((item) => item.toLowerCase() === "materials not publicly listed")
+      ? ["materials not publicly listed", ...missingInformation]
+      : missingInformation,
+    conclusion: cleanText(report.conclusion),
+  };
+}
+
+async function analyzeTextWithOpenAi({ productUrl, pageText }) {
+  const client = getOpenAiClient();
+  const response = await client.chat.completions.create({
+    model: OPENAI_MODEL,
+    max_tokens: 1500,
+    temperature: 0.2,
+    messages: [
+      {
+        role: "system",
+        content: SYSTEM_PROMPT,
+      },
+      {
+        role: "user",
+        content: `Analyse the following product page and return the JSON report.\n\nURL: ${productUrl}\n\nPage content:\n${pageText.slice(0, AI_PAGE_TEXT_LIMIT)}`,
+      },
+    ],
+  });
+  const raw = response.choices &&
+    response.choices[0] &&
+    response.choices[0].message &&
+    response.choices[0].message.content;
+
+  if (!raw) {
+    throw new Error("OpenAI response did not include JSON text");
+  }
+
+  return normalizeAiReport(parseAiJson(raw));
 }
 
 function escapeRegex(text) {
@@ -1103,6 +1302,165 @@ function withProductPageEvidence(report, productPageSnapshot) {
   };
 }
 
+function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted, brandInsight, productPageSnapshot }) {
+  const materialNames = aiReport.materials
+    .map((material) => material.percentage ? `${material.percentage} ${material.name}` : material.name)
+    .filter(Boolean);
+  const originDetails = [
+    aiReport.origin.country ? `Country: ${aiReport.origin.country}` : "",
+    aiReport.origin.factory ? `Factory: ${aiReport.origin.factory}` : "",
+  ].filter(Boolean);
+  const primaryMaterial = materialNames[0] || "Material not confirmed";
+  const materialExplanationText = aiReport.materials.length > 0
+    ? aiReport.materials
+        .map((material) => [
+          material.percentage ? `${material.percentage} ${material.name}` : material.name,
+          material.explanation,
+        ].filter(Boolean).join(": "))
+        .join(" ")
+    : "No material composition was publicly listed in the page text analyzed by OpenAI.";
+  const careSummary = aiReport.care_instructions.length > 0
+    ? aiReport.care_instructions.join(" ")
+    : "No clear care instructions were detected in the fetched page text. Check the garment label before washing.";
+  const sources = buildSources(productUrl, extracted);
+
+  return {
+    productSummary: aiReport.product_summary || `${retailer} product page analyzed, but OpenAI returned limited product summary detail.`,
+    materialExplained: {
+      rawMaterial: primaryMaterial,
+      simpleExplanation: materialExplanationText,
+      confidence: aiReport.materials.length > 0 ? "High" : "Low",
+      materials: aiReport.materials,
+    },
+    sustainabilityClaimsFound: aiReport.sustainability_claims.map((claim) => ({
+      claim: claim.claim,
+      evidence: claim.evidence || "No supporting certificate or third-party verification was found on the product page.",
+      type: claim.type,
+      confidence: claim.confidence,
+      whyItMatters: claim.type === "unverified"
+        ? "This is brand-provided wording without product-level certification evidence in the analyzed page text."
+        : "This claim should still be checked against product-level proof before being treated as independently verified.",
+    })),
+    productionOriginTransparency: {
+      status: originDetails.length > 0 ? "Found some origin or manufacturing detail" : "Not found",
+      detail: originDetails.length > 0
+        ? originDetails.join("; ")
+        : "No clear product-level country-of-origin, factory, or traceability text was found in the fetched page content.",
+      confidence: aiReport.origin.confidence,
+    },
+    supplierTransparency: {
+      status: aiReport.origin.factory ? "Found supplier or factory detail" : "Not found",
+      detail: aiReport.origin.factory || "No clear product-level supplier, factory, address, or employee-count information was found in the fetched page content.",
+      confidence: aiReport.origin.factory ? aiReport.origin.confidence : "Low",
+    },
+    washingCareAdvice: {
+      summary: careSummary,
+      confidence: aiReport.care_instructions.length > 0 ? "High" : "Low",
+    },
+    brandInsight,
+    aiAnalysis: {
+      provider: "openai",
+      model: OPENAI_MODEL,
+      brand: aiReport.brand,
+      productName: aiReport.product_name,
+      price: aiReport.price,
+      schema: "product-transparency-report-v1",
+    },
+    transparencyScore: {
+      score: aiReport.transparency_score.score,
+      outOf: 100,
+      rationale: aiReport.transparency_score.reasoning || "This score reflects only what OpenAI could identify in the fetched product page text.",
+    },
+    claimStrengthScore: {
+      score: aiReport.claim_strength_score.score,
+      outOf: 100,
+      rationale: aiReport.claim_strength_score.reasoning || "This score reflects the strength of product-page claim evidence returned by OpenAI.",
+    },
+    conclusion: aiReport.conclusion || "The fetched page could be analyzed, but the resulting transparency assessment was limited by the public page text.",
+    sources,
+    unknowns: aiReport.missing_information.length > 0
+      ? aiReport.missing_information
+      : buildUnknowns(
+          materialNames,
+          originDetails,
+          aiReport.care_instructions,
+          aiReport.sustainability_claims
+        ),
+  };
+}
+
+function buildAiFailureReport({
+  productUrl,
+  retailer,
+  productPageSnapshot,
+  brandInsight,
+  extracted,
+  message,
+}) {
+  const report = {
+    error: true,
+    message,
+    note: "The product page was fetched, but AI analysis could not be completed. This fallback keeps extraction evidence available for review.",
+    productSummary: `${retailer} product page fetched, but the OpenAI analysis could not be completed.`,
+    materialExplained: {
+      rawMaterial: "Material not confirmed",
+      simpleExplanation: "No AI-generated material explanation is available because the analysis step failed.",
+      confidence: "Low",
+    },
+    sustainabilityClaimsFound: [],
+    productionOriginTransparency: {
+      status: "Not found",
+      detail: "No AI-generated origin analysis is available because the analysis step failed.",
+      confidence: "Low",
+    },
+    supplierTransparency: {
+      status: "Not found",
+      detail: "No AI-generated supplier or factory analysis is available because the analysis step failed.",
+      confidence: "Low",
+    },
+    washingCareAdvice: {
+      summary: "No AI-generated care advice is available. Check the garment care label directly before washing.",
+      confidence: "Low",
+    },
+    brandInsight,
+    aiAnalysis: {
+      provider: "openai",
+      model: OPENAI_MODEL,
+      status: "failed",
+    },
+    transparencyScore: {
+      score: 0,
+      outOf: 100,
+      rationale: "No transparency score could be produced because AI analysis failed.",
+    },
+    claimStrengthScore: {
+      score: 0,
+      outOf: 100,
+      rationale: "No claim strength score could be produced because AI analysis failed.",
+    },
+    conclusion: "No AI-based product-level transparency assessment could be made from the fetched page content.",
+    sources: buildSources(productUrl, extracted),
+    unknowns: [
+      "materials not publicly listed",
+      "AI analysis unavailable",
+      "Product-level sustainability claims not assessed",
+      "Origin and manufacturing details not assessed",
+      "Care instructions not assessed",
+    ],
+  };
+
+  return {
+    metadata: {
+      generatedAt: new Date().toISOString(),
+      analysisMode: "openai-analysis-v1",
+      productUrl,
+      retailer,
+      productPageSnapshot,
+    },
+    report: withProductPageEvidence(report, productPageSnapshot),
+  };
+}
+
 function buildPartialReport(productUrl, retailer, note, productPageSnapshot, brandInsight = null, accessDiagnostics = null) {
   const report = {
     note,
@@ -1301,13 +1659,6 @@ async function analyzeProductUrl(productUrl) {
     ...extractTextBlocks(visibleHtml),
     ...splitIntoSnippets(bodyText),
   ], 400);
-  const materialMatches = findKeywordMatches(snippets, materialKeywords);
-  const claimMatches = findKeywordMatches(
-    prioritizeSustainabilitySnippets(snippets),
-    sustainabilityKeywords
-  );
-  const careMatches = findKeywordMatches(snippets, careKeywords);
-  const originMatches = findKeywordMatches(snippets, originKeywords);
   const visibleProductText = pickProductLikeText(
     snippets,
     extracted.openGraphTitle || extracted.twitterTitle || extracted.pageTitle,
@@ -1322,29 +1673,6 @@ async function analyzeProductUrl(productUrl) {
     return buildPartialReport(productUrl, retailer, fallbackNote, productPageSnapshot);
   }
 
-  const snapshotMaterials = productPageSnapshot.materialCompositionText || [];
-  const snapshotCareText = productPageSnapshot.careText || [];
-  const snapshotOriginText = productPageSnapshot.originText || [];
-  const snapshotSupplierText = productPageSnapshot.supplierDetailText || [];
-  const materialEvidence = snapshotMaterials.length > 0
-    ? snapshotMaterials
-    : materialMatches.map((match) => match.snippet);
-  const careEvidence = snapshotCareText.length > 0
-    ? snapshotCareText
-    : careMatches.map((match) => match.snippet);
-  const originEvidence = snapshotOriginText.length > 0
-    ? snapshotOriginText
-    : originMatches.map((match) => match.snippet);
-  const supplierEvidence = snapshotSupplierText.length > 0
-    ? snapshotSupplierText
-    : originEvidence.filter((value) => /supplier|factory|address|employees|workers|leverancier|fabriek/i.test(value));
-  const primaryMaterial = snapshotMaterials[0] || (materialMatches[0] ? materialMatches[0].keyword : "Material not clearly identified");
-  const materialConfidence = snapshotMaterials.length > 0
-    ? "High"
-    : materialMatches.length > 0
-      ? "Medium"
-      : "Low";
-  const claims = buildClaims(claimMatches);
   const brandInsight = await withTimeout(
     fetchBrandInsight({
       brand: productPageSnapshot.likelyBrand,
@@ -1354,76 +1682,44 @@ async function analyzeProductUrl(productUrl) {
     6500,
     brandInsightTimeoutFallback(productPageSnapshot.likelyBrand)
   );
-  const transparencyScore = calculateTransparencyScore(
-    materialEvidence,
-    originEvidence,
-    careEvidence,
-    pageReadable
-  );
-  const claimStrengthScore = calculateClaimStrengthScore(claims);
-  const note = materialMatches.length === 0 && claims.length === 0 && careMatches.length === 0
-    ? fallbackNote
-    : undefined;
 
-  const report = {
-    note,
-    productSummary: cleanText(
-      [title, description, visibleProductText]
-        .filter(Boolean)
-        .join(" ")
-    ) || `${retailer} product page fetched, but only limited descriptive text was visible.`,
-    materialExplained: {
-      rawMaterial: primaryMaterial,
-      simpleExplanation: materialEvidence.length > 0
-        ? materialExplanation(primaryMaterial)
-        : "No clear material wording was found in the fetched page text, so the composition remains uncertain.",
-      confidence: materialConfidence,
-    },
-    sustainabilityClaimsFound: claims,
-    productionOriginTransparency: {
-      status: originEvidence.length > 0 ? "Found some origin or manufacturing detail" : "Not found",
-      detail: originEvidence.length > 0
-        ? originEvidence[0]
-        : "No clear product-level country-of-origin, factory, or traceability text was found in the fetched page content.",
-      confidence: originEvidence.length > 0 ? "Medium" : "Low",
-    },
-    supplierTransparency: {
-      status: supplierEvidence.length > 0 ? "Found supplier or factory detail" : "Not found",
-      detail: supplierEvidence.length > 0
-        ? supplierEvidence[0]
-        : "No clear product-level supplier, factory, address, or employee-count information was found in the fetched page content.",
-      confidence: supplierEvidence.length > 0 ? "Medium" : "Low",
-    },
-    washingCareAdvice: {
-      summary: careEvidence.length > 0
-        ? careEvidence[0]
-        : "No clear care instructions were detected in the fetched page text. Check the garment label before washing.",
-      confidence: careEvidence.length > 0 ? "Medium" : "Low",
-    },
+  let aiReport;
+
+  try {
+    aiReport = await analyzeTextWithOpenAi({
+      productUrl,
+      pageText: cleanText(
+        [
+          title,
+          description,
+          visibleProductText,
+          bodyText,
+        ].filter(Boolean).join("\n\n")
+      ),
+    });
+  } catch (error) {
+    return buildAiFailureReport({
+      productUrl,
+      retailer,
+      productPageSnapshot,
+      brandInsight,
+      extracted,
+      message: error.message || "AI analysis failed",
+    });
+  }
+
+  const report = mapAiReportToExistingShape(aiReport, {
+    productUrl,
+    retailer,
+    extracted,
     brandInsight,
-    transparencyScore: {
-      score: transparencyScore,
-      outOf: 100,
-      rationale: "This score reflects only what was visible on the fetched product page, without an external source check.",
-    },
-    claimStrengthScore: {
-      score: claimStrengthScore,
-      outOf: 100,
-      rationale: claims.length > 0
-        ? "Claims were found on the page, but they remain brand-provided information unless checked against independent evidence."
-        : "No clear sustainability claim text was found on the fetched page.",
-    },
-    conclusion: claims.length > 0
-      ? "Some claim-like wording was visible on the product page, but this MVP treats it as brand-provided information rather than external proof."
-      : "The fetched page provided limited transparency detail and no clearly extractable independent sustainability evidence.",
-    sources: buildSources(productUrl, extracted),
-    unknowns: buildUnknowns(materialEvidence, originEvidence, careEvidence, claims),
-  };
+    productPageSnapshot,
+  });
 
   return {
     metadata: {
       generatedAt: new Date().toISOString(),
-      analysisMode: "live-fetch-v1",
+      analysisMode: "openai-analysis-v1",
       productUrl,
       retailer,
       productPageSnapshot,
