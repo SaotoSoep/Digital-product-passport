@@ -5,6 +5,12 @@ const {
   createFailedProductPageSnapshot,
   extractProductPageSnapshot,
 } = require("./lib/product-page/snapshot");
+const {
+  buildDeepEvidenceHtml,
+  createFailedDeepRead,
+  readDeepProductPage,
+} = require("./lib/product-page/deep-reader");
+const { callDeepReaderWorker } = require("./lib/product-page/deep-reader-worker-client");
 const { buildProductPageEvidence } = require("./lib/product-passport/evidence");
 const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 
@@ -471,6 +477,60 @@ async function analyzeTextWithOpenAi({ productUrl, pageText }) {
   return normalizeAiReport(parseAiJson(raw));
 }
 
+function formatEvidenceList(label, values) {
+  const rows = Array.isArray(values)
+    ? values.map(cleanText).filter(Boolean)
+    : [];
+
+  if (rows.length === 0) {
+    return "";
+  }
+
+  return `${label}:\n${rows.map((value) => `- ${value}`).join("\n")}`;
+}
+
+function buildSnapshotEvidenceText(snapshot) {
+  if (!snapshot) {
+    return "";
+  }
+
+  return cleanText([
+    "Normalized product-page evidence from visible sections, accordions, tabs, and embedded product data.",
+    snapshot.likelyBrand && snapshot.likelyBrand !== "not_found" ? `Brand: ${snapshot.likelyBrand}` : "",
+    snapshot.likelyProductName && snapshot.likelyProductName !== "not_found" ? `Product name: ${snapshot.likelyProductName}` : "",
+    formatEvidenceList("Product identifiers", snapshot.productIdentifiersText),
+    formatEvidenceList("Color or variant", snapshot.colorText),
+    formatEvidenceList("Product description", snapshot.productDescriptionText),
+    formatEvidenceList("Material composition", snapshot.materialCompositionText),
+    formatEvidenceList("Care instructions", snapshot.careText),
+    formatEvidenceList("Supplier and factory details", snapshot.supplierDetailText),
+    formatEvidenceList("Origin and manufacturing", snapshot.originText),
+    formatEvidenceList("Sustainability claims", snapshot.sustainabilityClaimSnippets),
+    formatEvidenceList("Certifications or standards", snapshot.certificationText),
+    formatEvidenceList("Durability, repair, or warranty", snapshot.durabilityClaimSnippets),
+  ].filter(Boolean).join("\n\n"));
+}
+
+function buildAiPageText({ title, description, visibleProductText, bodyText, productPageSnapshot }) {
+  return cleanText([
+    buildSnapshotEvidenceText(productPageSnapshot),
+    title,
+    description,
+    visibleProductText,
+    bodyText,
+  ].filter(Boolean).join("\n\n"));
+}
+
+function appendDeepEvidenceHtml(html, deepEvidenceHtml) {
+  if (!deepEvidenceHtml) {
+    return html;
+  }
+
+  return /<\/body>/i.test(String(html || ""))
+    ? String(html || "").replace(/<\/body>/i, `${deepEvidenceHtml}</body>`)
+    : `${html || ""}\n${deepEvidenceHtml}`;
+}
+
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -654,7 +714,7 @@ function buildClaims(matches) {
   return matches.slice(0, 5).map((match) => ({
     claim: match.keyword,
     brandClaim: match.snippet,
-    publicEvidence: "Visible on the submitted product page only. No independent verification was performed in this MVP.",
+    publicEvidence: "Visible on the submitted product page only. No independent verification was performed.",
     evidenceLevel: "Brand claim on product page",
     confidence: "Medium",
   }));
@@ -720,7 +780,7 @@ function buildSources(productUrl, extracted) {
   }
 
   sources.push({
-    type: "MVP limitation",
+    type: "Report limitation",
     label: "No broad web search, external registry lookup, or independent source check in this version",
   });
 
@@ -1245,8 +1305,8 @@ function collectReportFallbacks(report) {
   if (isUsefulFallbackValue(report.materialExplained && report.materialExplained.rawMaterial)) {
     fallbackByKey.materialComposition = {
       values: [report.materialExplained.rawMaterial],
-      sourceLabel: "MVP keyword fallback",
-      note: "Derived from the report's lightweight keyword analysis, not from the normalized product-page field.",
+      sourceLabel: "Report keyword fallback",
+      note: "Derived from keyword analysis, not from the normalized product-page field.",
     };
   }
 
@@ -1257,7 +1317,7 @@ function collectReportFallbacks(report) {
   if (claimValues.length > 0) {
     fallbackByKey.sustainabilityClaims = {
       values: claimValues,
-      sourceLabel: "MVP claim fallback",
+      sourceLabel: "Report claim fallback",
       note: "Shown separately because the report detected claim-like wording outside the normalized snapshot field.",
     };
   }
@@ -1265,44 +1325,208 @@ function collectReportFallbacks(report) {
   if (isUsefulFallbackValue(report.washingCareAdvice && report.washingCareAdvice.summary)) {
     fallbackByKey.careText = {
       values: [report.washingCareAdvice.summary],
-      sourceLabel: "MVP care fallback",
-      note: "Derived from the report's lightweight care-text scan, not from the normalized product-page field.",
+      sourceLabel: "Report care fallback",
+      note: "Derived from a care-text scan, not from the normalized product-page field.",
     };
   }
 
   if (isUsefulFallbackValue(report.productionOriginTransparency && report.productionOriginTransparency.detail)) {
     fallbackByKey.productionOrigin = {
       values: [report.productionOriginTransparency.detail],
-      sourceLabel: "MVP origin fallback",
-      note: "Derived from the report's lightweight origin scan, not from the normalized product-page field.",
+      sourceLabel: "Report origin fallback",
+      note: "Derived from an origin scan, not from the normalized product-page field.",
     };
   }
 
   if (isUsefulFallbackValue(report.supplierTransparency && report.supplierTransparency.detail)) {
     fallbackByKey.supplierDetails = {
       values: [report.supplierTransparency.detail],
-      sourceLabel: "MVP supplier fallback",
-      note: "Derived from the report's lightweight supplier scan, not from the normalized product-page field.",
+      sourceLabel: "Report supplier fallback",
+      note: "Derived from a supplier scan, not from the normalized product-page field.",
     };
   }
 
   return fallbackByKey;
 }
 
-function withProductPageEvidence(report, productPageSnapshot) {
+function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
+  if (!productPageEvidence || !deepPageReadEvidence || deepPageReadEvidence.status !== "failed") {
+    return productPageEvidence;
+  }
+
+  const fields = productPageEvidence.fields || {};
+  for (const field of Object.values(fields)) {
+    if (field.status !== "not_found") {
+      continue;
+    }
+
+    field.status = "unavailable";
+    field.source = "deep_page_read_unavailable";
+    field.sourceLabel = "Deep page read unavailable";
+    field.note = `Deep page read failed: ${deepPageReadEvidence.failureReason || "unable to fully inspect the page"}.`;
+  }
+
+  const fieldList = Object.values(fields);
+  productPageEvidence.missingFields = fieldList
+    .filter((field) => field.status === "not_found")
+    .map((field) => field.label);
+  productPageEvidence.unavailableFields = fieldList
+    .filter((field) => field.status === "unavailable")
+    .map((field) => field.label);
+  productPageEvidence.foundFields = fieldList
+    .filter((field) => field.status === "found")
+    .map((field) => field.label);
+  productPageEvidence.summary = `Product-page extraction found ${productPageEvidence.foundFields.length} checked field(s). ${productPageEvidence.unavailableFields.length} field(s) could not be fully checked because deep page reading failed.`;
+
+  return productPageEvidence;
+}
+
+function withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence = null) {
   const productPageEvidence = buildProductPageEvidence(
     productPageSnapshot,
     collectReportFallbacks(report)
   );
+  const checkedProductPageEvidence = applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence);
 
   return {
     ...report,
-    productPageEvidence,
-    passportReadiness: buildPassportReadiness(productPageEvidence, productPageSnapshot),
+    deepPageReadEvidence,
+    productPageEvidence: checkedProductPageEvidence,
+    passportReadiness: buildPassportReadiness(checkedProductPageEvidence, productPageSnapshot),
   };
 }
 
+function parseSnapshotMaterials(snapshot) {
+  const rows = Array.isArray(snapshot && snapshot.materialCompositionText)
+    ? snapshot.materialCompositionText
+    : [];
+  const materials = [];
+
+  for (const row of rows) {
+    const text = cleanText(row);
+    const matches = [...text.matchAll(/(\d{1,3}\s*%)\s*([^,;]+)/g)];
+
+    for (const match of matches) {
+      const percentage = cleanText(match[1]).replace(/\s+/g, "");
+      const rawName = cleanText(match[2])
+        .replace(/^(shell|lining|pocket lining|composition)\s*:\s*/i, "")
+        .replace(/[.]+$/g, "");
+      const name = cleanText(rawName);
+
+      if (name) {
+        materials.push({
+          name,
+          percentage,
+          explanation: materialExplanation(name.toLowerCase()),
+        });
+      }
+    }
+  }
+
+  return materials;
+}
+
+function snapshotValues(snapshot, key) {
+  const value = snapshot && snapshot[key];
+  return Array.isArray(value)
+    ? value.map(cleanText).filter(Boolean)
+    : [];
+}
+
+function snapshotText(snapshot, key, limit = 4, separator = "; ") {
+  return uniqueSnippets(snapshotValues(snapshot, key), limit).join(separator);
+}
+
+function firstMatchValue(values, label) {
+  const pattern = new RegExp(`\\b${escapeRegex(label)}\\b\\s*:\\s*([^;]+)`, "i");
+
+  for (const value of values) {
+    const match = cleanText(value).match(pattern);
+    if (match && cleanText(match[1])) {
+      return cleanText(match[1]);
+    }
+  }
+
+  return "";
+}
+
+function deriveSnapshotOrigin(snapshot) {
+  const values = [
+    ...((snapshot && snapshot.supplierDetailText) || []),
+    ...((snapshot && snapshot.originText) || []),
+  ];
+
+  return {
+    country: firstMatchValue(values, "Country"),
+    factory: firstMatchValue(values, "Factory") || firstMatchValue(values, "Supplier"),
+  };
+}
+
+function deriveSnapshotPrice(snapshot) {
+  const identifiers = Array.isArray(snapshot && snapshot.productIdentifiersText)
+    ? snapshot.productIdentifiersText
+    : [];
+  const priceRow = identifiers.find((value) => /^price\s*:/i.test(cleanText(value)));
+
+  return priceRow
+    ? cleanText(priceRow.replace(/^price\s*:\s*/i, ""))
+    : "";
+}
+
+function withSnapshotFallbackAiReport(aiReport, productPageSnapshot) {
+  const snapshotMaterials = parseSnapshotMaterials(productPageSnapshot);
+  const snapshotOrigin = deriveSnapshotOrigin(productPageSnapshot);
+  const snapshotCare = snapshotValues(productPageSnapshot, "careText")
+    .filter((value) => !/^product care$/i.test(value));
+  const materials = snapshotMaterials.length > 0
+    ? snapshotMaterials
+    : aiReport.materials;
+  const careInstructions = snapshotCare.length > 0
+    ? snapshotCare
+    : aiReport.care_instructions;
+  const hasAiOrigin = Boolean(aiReport.origin.country || aiReport.origin.factory);
+  const hasSnapshotOrigin = Boolean(snapshotOrigin.country || snapshotOrigin.factory);
+  const origin = {
+    country: snapshotOrigin.country || aiReport.origin.country || null,
+    factory: snapshotOrigin.factory || aiReport.origin.factory || null,
+    confidence: hasAiOrigin || hasSnapshotOrigin
+      ? hasSnapshotOrigin ? "High" : aiReport.origin.confidence
+      : aiReport.origin.confidence,
+  };
+  const missingInformation = materials.length > 0
+    ? aiReport.missing_information.filter((item) => item.toLowerCase() !== "materials not publicly listed")
+    : aiReport.missing_information;
+
+  return {
+    ...aiReport,
+    brand: aiReport.brand || (productPageSnapshot && productPageSnapshot.likelyBrand !== "not_found" ? productPageSnapshot.likelyBrand : null),
+    product_name: aiReport.product_name || (productPageSnapshot && productPageSnapshot.likelyProductName !== "not_found" ? productPageSnapshot.likelyProductName : null),
+    price: aiReport.price || deriveSnapshotPrice(productPageSnapshot) || null,
+    materials,
+    origin,
+    care_instructions: careInstructions,
+    missing_information: missingInformation,
+  };
+}
+
+function evidenceBackedStatus(foundStatus, missingStatus, value) {
+  return isUsefulFallbackValue(value) ? foundStatus : missingStatus;
+}
+
 function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted, brandInsight, productPageSnapshot }) {
+  aiReport = withSnapshotFallbackAiReport(aiReport, productPageSnapshot);
+  const snapshotMaterialText = snapshotText(productPageSnapshot, "materialCompositionText");
+  const snapshotCareText = snapshotValues(productPageSnapshot, "careText")
+    .filter((value) => !/^product care$/i.test(value))
+    .join("; ");
+  const snapshotSupplierText = snapshotText(productPageSnapshot, "supplierDetailText", 2);
+  const snapshotOrigin = deriveSnapshotOrigin(productPageSnapshot);
+  const conciseSnapshotOriginText = [
+    snapshotOrigin.country ? `Country: ${snapshotOrigin.country}` : "",
+    snapshotOrigin.factory ? `Factory: ${snapshotOrigin.factory}` : "",
+  ].filter(Boolean).join("; ");
+  const snapshotOriginText = conciseSnapshotOriginText || snapshotText(productPageSnapshot, "originText", 2);
+  const snapshotDescriptionText = snapshotText(productPageSnapshot, "productDescriptionText", 2);
   const materialNames = aiReport.materials
     .map((material) => material.percentage ? `${material.percentage} ${material.name}` : material.name)
     .filter(Boolean);
@@ -1310,7 +1534,7 @@ function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted,
     aiReport.origin.country ? `Country: ${aiReport.origin.country}` : "",
     aiReport.origin.factory ? `Factory: ${aiReport.origin.factory}` : "",
   ].filter(Boolean);
-  const primaryMaterial = materialNames[0] || "Material not confirmed";
+  const primaryMaterial = snapshotMaterialText || materialNames.join(", ") || "Material not confirmed";
   const materialExplanationText = aiReport.materials.length > 0
     ? aiReport.materials
         .map((material) => [
@@ -1318,18 +1542,27 @@ function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted,
           material.explanation,
         ].filter(Boolean).join(": "))
         .join(" ")
-    : "No material composition was publicly listed in the page text analyzed by OpenAI.";
-  const careSummary = aiReport.care_instructions.length > 0
+    : "No material composition was publicly listed in the product-page text.";
+  const careSummary = snapshotCareText || (aiReport.care_instructions.length > 0
     ? aiReport.care_instructions.join(" ")
+    : "");
+  const originDetail = snapshotOriginText || (originDetails.length > 0
+    ? originDetails.join("; ")
+    : "");
+  const supplierDetail = snapshotSupplierText || aiReport.origin.factory || "";
+  const productSummary = aiReport.product_summary || snapshotDescriptionText ||
+    `${retailer} product page analyzed, but limited product summary detail was available.`;
+  const finalCareSummary = careSummary
+    ? careSummary
     : "No clear care instructions were detected in the fetched page text. Check the garment label before washing.";
   const sources = buildSources(productUrl, extracted);
 
   return {
-    productSummary: aiReport.product_summary || `${retailer} product page analyzed, but OpenAI returned limited product summary detail.`,
+    productSummary,
     materialExplained: {
       rawMaterial: primaryMaterial,
       simpleExplanation: materialExplanationText,
-      confidence: aiReport.materials.length > 0 ? "High" : "Low",
+      confidence: snapshotMaterialText || aiReport.materials.length > 0 ? "High" : "Low",
       materials: aiReport.materials,
     },
     sustainabilityClaimsFound: aiReport.sustainability_claims.map((claim) => ({
@@ -1342,20 +1575,18 @@ function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted,
         : "This claim should still be checked against product-level proof before being treated as independently verified.",
     })),
     productionOriginTransparency: {
-      status: originDetails.length > 0 ? "Found some origin or manufacturing detail" : "Not found",
-      detail: originDetails.length > 0
-        ? originDetails.join("; ")
-        : "No clear product-level country-of-origin, factory, or traceability text was found in the fetched page content.",
-      confidence: aiReport.origin.confidence,
+      status: evidenceBackedStatus("Found some origin or manufacturing detail", "Not found", originDetail),
+      detail: originDetail || "No clear product-level country-of-origin, factory, or traceability text was found in the fetched page content.",
+      confidence: originDetail ? "High" : "Low",
     },
     supplierTransparency: {
-      status: aiReport.origin.factory ? "Found supplier or factory detail" : "Not found",
-      detail: aiReport.origin.factory || "No clear product-level supplier, factory, address, or employee-count information was found in the fetched page content.",
-      confidence: aiReport.origin.factory ? aiReport.origin.confidence : "Low",
+      status: evidenceBackedStatus("Found supplier or factory detail", "Not found", supplierDetail),
+      detail: supplierDetail || "No clear product-level supplier, factory, address, or employee-count information was found in the fetched page content.",
+      confidence: supplierDetail ? "High" : "Low",
     },
     washingCareAdvice: {
-      summary: careSummary,
-      confidence: aiReport.care_instructions.length > 0 ? "High" : "Low",
+      summary: finalCareSummary,
+      confidence: careSummary ? "High" : "Low",
     },
     brandInsight,
     aiAnalysis: {
@@ -1369,12 +1600,12 @@ function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted,
     transparencyScore: {
       score: aiReport.transparency_score.score,
       outOf: 100,
-      rationale: aiReport.transparency_score.reasoning || "This score reflects only what OpenAI could identify in the fetched product page text.",
+      rationale: aiReport.transparency_score.reasoning || "This score reflects what could be identified in the fetched product-page text.",
     },
     claimStrengthScore: {
       score: aiReport.claim_strength_score.score,
       outOf: 100,
-      rationale: aiReport.claim_strength_score.reasoning || "This score reflects the strength of product-page claim evidence returned by OpenAI.",
+      rationale: aiReport.claim_strength_score.reasoning || "This score reflects the strength of product-page claim evidence.",
     },
     conclusion: aiReport.conclusion || "The fetched page could be analyzed, but the resulting transparency assessment was limited by the public page text.",
     sources,
@@ -1393,6 +1624,7 @@ function buildAiFailureReport({
   productUrl,
   retailer,
   productPageSnapshot,
+  deepPageReadEvidence,
   brandInsight,
   extracted,
   message,
@@ -1400,26 +1632,26 @@ function buildAiFailureReport({
   const report = {
     error: true,
     message,
-    note: "The product page was fetched, but AI analysis could not be completed. This fallback keeps extraction evidence available for review.",
-    productSummary: `${retailer} product page fetched, but the OpenAI analysis could not be completed.`,
+    note: "The product page was fetched, but the full analysis could not be completed. This fallback keeps extraction evidence available for review.",
+    productSummary: `${retailer} product page fetched, but the full analysis could not be completed.`,
     materialExplained: {
       rawMaterial: "Material not confirmed",
-      simpleExplanation: "No AI-generated material explanation is available because the analysis step failed.",
+      simpleExplanation: "No material explanation is available because the analysis step failed.",
       confidence: "Low",
     },
     sustainabilityClaimsFound: [],
     productionOriginTransparency: {
       status: "Not found",
-      detail: "No AI-generated origin analysis is available because the analysis step failed.",
+      detail: "No origin analysis is available because the analysis step failed.",
       confidence: "Low",
     },
     supplierTransparency: {
       status: "Not found",
-      detail: "No AI-generated supplier or factory analysis is available because the analysis step failed.",
+      detail: "No supplier or factory analysis is available because the analysis step failed.",
       confidence: "Low",
     },
     washingCareAdvice: {
-      summary: "No AI-generated care advice is available. Check the garment care label directly before washing.",
+      summary: "No care advice is available. Check the garment care label directly before washing.",
       confidence: "Low",
     },
     brandInsight,
@@ -1431,18 +1663,18 @@ function buildAiFailureReport({
     transparencyScore: {
       score: 0,
       outOf: 100,
-      rationale: "No transparency score could be produced because AI analysis failed.",
+      rationale: "No transparency score could be produced because the analysis failed.",
     },
     claimStrengthScore: {
       score: 0,
       outOf: 100,
-      rationale: "No claim strength score could be produced because AI analysis failed.",
+      rationale: "No claim strength score could be produced because the analysis failed.",
     },
-    conclusion: "No AI-based product-level transparency assessment could be made from the fetched page content.",
+    conclusion: "No product-level transparency assessment could be made from the fetched page content.",
     sources: buildSources(productUrl, extracted),
     unknowns: [
       "materials not publicly listed",
-      "AI analysis unavailable",
+      "Full analysis unavailable",
       "Product-level sustainability claims not assessed",
       "Origin and manufacturing details not assessed",
       "Care instructions not assessed",
@@ -1456,12 +1688,13 @@ function buildAiFailureReport({
       productUrl,
       retailer,
       productPageSnapshot,
+      deepPageReadEvidence,
     },
-    report: withProductPageEvidence(report, productPageSnapshot),
+    report: withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence),
   };
 }
 
-function buildPartialReport(productUrl, retailer, note, productPageSnapshot, brandInsight = null, accessDiagnostics = null) {
+function buildPartialReport(productUrl, retailer, note, productPageSnapshot, brandInsight = null, accessDiagnostics = null, deepPageReadEvidence = null) {
   const report = {
     note,
     productSummary: `${retailer} product link received, but the page content could not be reliably read. This is a limited fallback report.`,
@@ -1537,8 +1770,9 @@ function buildPartialReport(productUrl, retailer, note, productPageSnapshot, bra
       productUrl,
       retailer,
       productPageSnapshot,
+      deepPageReadEvidence,
     },
-    report: withProductPageEvidence(report, productPageSnapshot),
+    report: withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence),
   };
 }
 
@@ -1583,6 +1817,19 @@ async function fetchHtml(productUrl, timeoutMs = 10000) {
   }
 }
 
+async function readProductPageDeepEvidence(productUrl) {
+  const workerResult = await callDeepReaderWorker(productUrl);
+  if (workerResult) {
+    return workerResult;
+  }
+
+  return readDeepProductPage(productUrl);
+}
+
+function createDeepReadTimeout(productUrl) {
+  return createFailedDeepRead(productUrl, "page timeout");
+}
+
 async function analyzeProductUrl(productUrl) {
   if (!productUrl || typeof productUrl !== "string") {
     throw new Error("Product URL is required");
@@ -1600,11 +1847,22 @@ async function analyzeProductUrl(productUrl) {
   const fallbackNote = "Could not reliably read the product page. This report is based on limited available data.";
 
   let html;
+  let deepPageReadEvidence = await withTimeout(
+    readProductPageDeepEvidence(productUrl),
+    Number(process.env.DEEP_READER_WORKER_TIMEOUT_MS || 35000),
+    createDeepReadTimeout(productUrl)
+  );
   let productPageSnapshot;
 
   try {
     html = await fetchHtml(productUrl);
   } catch (error) {
+    const deepEvidenceHtml = buildDeepEvidenceHtml(deepPageReadEvidence);
+    if (deepEvidenceHtml) {
+      const inferredBrand = inferBrandFromUrl(productUrl);
+      const inferredProductName = inferProductNameFromUrl(productUrl);
+      html = `<!doctype html><html><head><title>${inferredProductName} | ${inferredBrand}</title><meta name="brand" content="${inferredBrand}" /></head><body>${deepEvidenceHtml}</body></html>`;
+    } else {
     const inferredBrand = inferBrandFromUrl(productUrl);
     const inferredProductName = inferProductNameFromUrl(productUrl);
     productPageSnapshot = createFailedProductPageSnapshot(
@@ -1633,17 +1891,32 @@ async function analyzeProductUrl(productUrl) {
       6500,
       brandInsightTimeoutFallback(inferredBrand)
     );
+    if (!deepPageReadEvidence || deepPageReadEvidence.status === "skipped") {
+      deepPageReadEvidence = createFailedDeepRead(
+        productUrl,
+        error.accessIssue && error.accessIssue.type === "bot_verification"
+          ? "blocked by bot protection"
+          : error.accessIssue && error.accessIssue.type === "access_denied_page"
+          ? "access denied"
+          : error.message || "page timeout"
+      );
+    }
     return buildPartialReport(
       productUrl,
       retailer,
       error.accessIssue ? error.accessIssue.detail : fallbackNote,
       productPageSnapshot,
       brandInsight,
-      error.accessIssue || null
+      error.accessIssue || null,
+      deepPageReadEvidence
     );
+    }
   }
 
-  productPageSnapshot = extractProductPageSnapshot(html, productUrl);
+  const deepEvidenceHtml = buildDeepEvidenceHtml(deepPageReadEvidence);
+  const analysisHtml = appendDeepEvidenceHtml(html, deepEvidenceHtml);
+
+  productPageSnapshot = extractProductPageSnapshot(analysisHtml, productUrl);
 
   const extracted = {
     openGraphTitle: extractMetaContent(html, "property", "og:title"),
@@ -1653,7 +1926,7 @@ async function analyzeProductUrl(productUrl) {
     pageTitle: extractTitle(html),
   };
 
-  const visibleHtml = removeNonVisibleMarkup(html);
+  const visibleHtml = removeNonVisibleMarkup(analysisHtml);
   const bodyText = stripTags(visibleHtml);
   const snippets = uniqueSnippets([
     ...extractTextBlocks(visibleHtml),
@@ -1688,14 +1961,13 @@ async function analyzeProductUrl(productUrl) {
   try {
     aiReport = await analyzeTextWithOpenAi({
       productUrl,
-      pageText: cleanText(
-        [
-          title,
-          description,
-          visibleProductText,
-          bodyText,
-        ].filter(Boolean).join("\n\n")
-      ),
+      pageText: buildAiPageText({
+        title,
+        description,
+        visibleProductText,
+        bodyText,
+        productPageSnapshot,
+      }),
     });
   } catch (error) {
     return buildAiFailureReport({
@@ -1704,7 +1976,8 @@ async function analyzeProductUrl(productUrl) {
       productPageSnapshot,
       brandInsight,
       extracted,
-      message: error.message || "AI analysis failed",
+      deepPageReadEvidence,
+      message: error.message || "Analysis failed",
     });
   }
 
@@ -1723,11 +1996,13 @@ async function analyzeProductUrl(productUrl) {
       productUrl,
       retailer,
       productPageSnapshot,
+      deepPageReadEvidence,
     },
-    report: withProductPageEvidence(report, productPageSnapshot),
+    report: withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence),
   };
 }
 
 module.exports = {
   analyzeProductUrl,
+  buildAiPageText,
 };

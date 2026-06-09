@@ -113,7 +113,7 @@ function normalizeFallback(fallback) {
   return {
     status: "fallback",
     source: fallback.source || "mvp_report_fallback",
-    sourceLabel: fallback.sourceLabel || "MVP report fallback",
+    sourceLabel: fallback.sourceLabel || "Report fallback",
     values,
     note: fallback.note || "Shown separately because no product-page value was found for this field.",
   };

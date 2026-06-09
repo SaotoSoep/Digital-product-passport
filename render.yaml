@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: deep-reader-worker
+    runtime: docker
+    rootDir: deep-reader-worker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8080
+      - key: ALLOW_PRIVATE_URLS
+        value: "0"

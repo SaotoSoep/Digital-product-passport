@@ -3,13 +3,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
-const { analyzeProductUrl } = require("../src/analyzer");
+const { analyzeProductUrl, buildAiPageText } = require("../src/analyzer");
 const { buildProductPageEvidence } = require("../src/lib/product-passport/evidence");
 const { buildPassportReadiness } = require("../src/lib/product-passport/readiness");
 const {
   createFailedProductPageSnapshot,
   extractProductPageSnapshot,
 } = require("../src/lib/product-page/snapshot");
+const { buildDeepEvidenceHtml } = require("../src/lib/product-page/deep-reader");
 
 function fixture(name) {
   return fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
@@ -321,4 +322,65 @@ test("reports bot verification blocks and still fetches public brand context", a
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test("places normalized tab and accordion evidence before raw page text for AI analysis", () => {
+  const pageText = buildAiPageText({
+    title: "LINEN-BLEND RELAXED-FIT WIDE-LEG TROUSERS | COS NL",
+    description: "COS product page",
+    visibleProductText: "Visible product teaser",
+    bodyText: "Navigation text ".repeat(800) + "late raw body text",
+    productPageSnapshot: {
+      likelyBrand: "COS",
+      likelyProductName: "LINEN-BLEND RELAXED-FIT WIDE-LEG TROUSERS",
+      productIdentifiersText: ["Product no. 1328998001", "Price: €99,00"],
+      colorText: ["Color: Dark brown"],
+      productDescriptionText: ["Relaxed wide-leg trousers in a linen blend."],
+      materialCompositionText: [
+        "Shell: 62% Viscose, 26% Linen, 12% Cotton",
+        "Pocket lining: 100% Cotton",
+      ],
+      careText: ["Machine wash cold. gentle cycle", "Dry clean only"],
+      supplierDetailText: [
+        "Supplier: The Orient Apparel (DongGuan) Ltd.; Country: Mainland China; Factory: THE ORIENT APPAREL (DONGGUAN) LTD.; Address: No. 8 Yindou Middle Road, QingXi Town, 523649, Dongguan, Mainland China; Employees: 1008",
+      ],
+      originText: [
+        "Factory: THE ORIENT APPAREL (DONGGUAN) LTD.; Supplier: The Orient Apparel (DongGuan) Ltd.; Address: No. 8 Yindou Middle Road, QingXi Town, 523649, Dongguan, Mainland China; 1008 workers",
+      ],
+      sustainabilityClaimSnippets: [],
+      certificationText: [],
+      durabilityClaimSnippets: [],
+    },
+  });
+
+  assert(pageText.startsWith("Normalized product-page evidence"));
+  assert(pageText.indexOf("Material composition") < pageText.indexOf("Navigation text"));
+  assert(pageText.indexOf("Supplier and factory details") < pageText.indexOf("Navigation text"));
+  assert.match(pageText, /The Orient Apparel/);
+  assert.match(pageText, /Employees: 1008/);
+});
+
+test("feeds deep page read evidence into normalized product-page extraction", () => {
+  const deepHtml = buildDeepEvidenceHtml({
+    textEvidence: [
+      {
+        sourceUrl: "https://shop.example/product",
+        sectionLabel: "Zorg informatie",
+        interactionType: "tab",
+        selector: "button[aria-controls='care']",
+        text: "Zorg informatie 100% Linnen Fijnwasprogramma, machinewas op 30°C Matig strijken",
+        timestamp: "2026-06-08T12:00:00.000Z",
+      },
+    ],
+    structuredData: [],
+    networkResponses: [],
+  });
+  const snapshot = extractProductPageSnapshot(
+    `<!doctype html><html><head><title>Hidden tabs product</title></head><body><h1>Linen trousers</h1>${deepHtml}</body></html>`,
+    "https://shop.example/product",
+    new Date("2026-06-08T12:00:00.000Z")
+  );
+
+  assert(snapshot.materialCompositionText.some((value) => /100% Linnen/.test(value)));
+  assert(snapshot.careText.some((value) => /Fijnwasprogramma/.test(value)));
 });

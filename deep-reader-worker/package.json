@@ -1,0 +1,13 @@
+{
+  "name": "deep-reader-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "NODE_ENV=test node --test"
+  },
+  "dependencies": {
+    "playwright": "^1.57.0"
+  }
+}

@@ -238,6 +238,16 @@ function fieldDisplayValue(field, fallback) {
   return cleanReadableText(fallback);
 }
 
+function usefulReportText(value) {
+  const text = cleanReadableText(value);
+
+  if (!text || /^(no clear|not found|care information not found|origin\/manufacturing information not found|supplier\/factory information not found|material not found)/i.test(text)) {
+    return "";
+  }
+
+  return text;
+}
+
 function scoreValue(score) {
   const numeric = Number(score && score.score);
   if (!Number.isFinite(numeric)) {
@@ -322,7 +332,6 @@ function renderSummaryCard(label, value, emptyText, options = {}) {
     <article class="summary-block ${options.wide ? "wide" : ""}">
       <span class="mini-label">${escapeHtml(label)}</span>
       ${renderTextValue(value, emptyText)}
-      ${options.detail ? `<p class="muted">${escapeHtml(cleanReadableText(options.detail))}</p>` : ""}
     </article>
   `;
 }
@@ -371,7 +380,7 @@ function extractModel(response, submittedUrl) {
     fields.materialComposition,
     ""
   );
-  const material = cleanReadableText(report.materialExplained?.rawMaterial) || evidenceMaterial || "Material not found";
+  const material = evidenceMaterial || usefulReportText(report.materialExplained?.rawMaterial) || "Material not found";
   const materialExplanation = cleanReadableText(report.materialExplained?.simpleExplanation);
   const materialItems = Array.isArray(report.materialExplained?.materials)
     ? report.materialExplained.materials
@@ -400,17 +409,17 @@ function extractModel(response, submittedUrl) {
     fields.careText,
     ""
   );
-  const care = cleanReadableText(report.washingCareAdvice?.summary) || evidenceCare || "Care information not found";
+  const care = evidenceCare || usefulReportText(report.washingCareAdvice?.summary) || "Care information not found";
   const evidenceOrigin = fieldDisplayValue(
     fields.productionOrigin,
     ""
   );
-  const origin = cleanReadableText(report.productionOriginTransparency?.detail) || evidenceOrigin || "Origin/manufacturing information not found";
+  const origin = evidenceOrigin || usefulReportText(report.productionOriginTransparency?.detail) || "Origin/manufacturing information not found";
   const evidenceSupplierDetails = fieldDisplayValue(
     fields.supplierDetails,
     ""
   );
-  const supplierDetails = cleanReadableText(report.supplierTransparency?.detail) || evidenceSupplierDetails || "Supplier/factory information not found";
+  const supplierDetails = evidenceSupplierDetails || usefulReportText(report.supplierTransparency?.detail) || "Supplier/factory information not found";
   const certifications = fieldValues(fields.certifications);
   const durabilityClaims = fieldValues(fields.durabilityClaims);
   const claimValues = fieldValues(fields.sustainabilityClaims);
@@ -483,6 +492,7 @@ function extractModel(response, submittedUrl) {
     generatedAt,
     sourceUrl,
     brandInsight,
+    deepPageReadEvidence: report.deepPageReadEvidence || metadata.deepPageReadEvidence || null,
     accessDiagnostics,
     passportReadiness,
     evidenceFields,
@@ -496,6 +506,54 @@ function extractModel(response, submittedUrl) {
     originReport: report.productionOriginTransparency || null,
     sources: Array.isArray(report.sources) ? report.sources : [],
   };
+}
+
+function renderDeepPageReadEvidence(model) {
+  const evidence = model.deepPageReadEvidence;
+
+  if (!evidence) {
+    return "";
+  }
+
+  const counts = evidence.counts || {};
+  const labels = Array.isArray(evidence.sectionLabels)
+    ? evidence.sectionLabels.map(cleanReadableText).filter(Boolean)
+    : [];
+  const status = displayText(evidence.status || "unknown");
+  const badgeStatus = status === "success"
+    ? "found"
+    : status === "skipped"
+    ? "unavailable"
+    : normalizeStatus(status);
+
+  return `
+    <article class="evidence-checklist">
+      <div class="checklist-header">
+        <div>
+          <span class="mini-label">Deep page read evidence</span>
+          <h3>${escapeHtml(statusLabel(badgeStatus))}</h3>
+        </div>
+        <span class="coverage-pill">${escapeHtml(status)}</span>
+      </div>
+      <div class="checklist-grid">
+        <div class="checklist-item found"><span>Tabs clicked</span><strong>${Number(counts.tabsClicked || 0)}</strong></div>
+        <div class="checklist-item found"><span>Accordions opened</span><strong>${Number(counts.accordionsOpened || 0)}</strong></div>
+        <div class="checklist-item found"><span>Read-more expanded</span><strong>${Number(counts.readMoreExpanded || 0)}</strong></div>
+        <div class="checklist-item found"><span>Structured data blocks</span><strong>${Number(counts.structuredDataBlocks || 0)}</strong></div>
+        <div class="checklist-item found"><span>Relevant network responses</span><strong>${Number(counts.relevantNetworkResponses || 0)}</strong></div>
+      </div>
+      ${
+        labels.length > 0
+          ? `<p class="source-line">Sections opened: ${escapeHtml(labels.slice(0, 12).join(" · "))}</p>`
+          : ""
+      }
+      ${
+        evidence.failureReason
+          ? `<p class="source-line">Deep read note: ${escapeHtml(cleanReadableText(evidence.failureReason))}</p>`
+          : ""
+      }
+    </article>
+  `;
 }
 
 function buildVerdict(model) {
@@ -621,10 +679,12 @@ function readinessTone(status) {
   return "warning";
 }
 
-function renderReadinessList(items, emptyText, itemClass = "") {
+function renderReadinessList(items, emptyText, itemClass = "", options = {}) {
   if (!Array.isArray(items) || items.length === 0) {
     return `<p class="muted">${escapeHtml(emptyText)}</p>`;
   }
+
+  const showDetails = options.showDetails !== false;
 
   return `
     <ul class="readiness-list ${itemClass}">
@@ -632,7 +692,7 @@ function renderReadinessList(items, emptyText, itemClass = "") {
         <li>
           <strong>${escapeHtml(displayText(item.label || item.key || "Passport item"))}</strong>
           ${item.value ? `<span>${escapeHtml(cleanReadableText(item.value))}</span>` : ""}
-          ${item.detail ? `<p>${escapeHtml(cleanReadableText(item.detail))}</p>` : ""}
+          ${showDetails && item.detail ? `<p>${escapeHtml(cleanReadableText(item.detail))}</p>` : ""}
         </li>
       `).join("")}
     </ul>
@@ -684,7 +744,7 @@ function renderPassportReadiness(model) {
           return {
             ...item,
             value: model.productSummary,
-            detail: "AI-cleaned summary based on the extracted product-page text.",
+            detail: "",
           };
         }
 
@@ -712,7 +772,7 @@ function renderPassportReadiness(model) {
       <div class="readiness-columns">
         <section>
           <h4>Usable for the passport</h4>
-          ${renderReadinessList(readyFields.slice(0, 6), "No passport-ready fields were found yet.")}
+          ${renderReadinessList(readyFields.slice(0, 6), "No passport-ready fields were found yet.", "", { showDetails: false })}
         </section>
         <section>
           <h4>Still missing</h4>
@@ -809,7 +869,7 @@ function renderReportOverview(model) {
   const claimRationale = known(model.report.claimStrengthScore?.rationale);
   const coverageSummary = model.extractionStatus === "failed"
     ? "Product-page extraction failed. Fallback values remain separated from product-page evidence."
-    : `Product-page extraction found ${model.foundCount} of ${model.checkedCount} relevant MVP fields. Fields that were not found are listed separately in the Gaps tab. Fallback values remain separated from product-page evidence.`;
+    : `Product-page extraction found ${model.foundCount} of ${model.checkedCount} relevant fields. Fields that were not found are listed separately in the Gaps tab. Fallback values remain separated from product-page evidence.`;
 
   reportOverview.innerHTML = `
     <div class="verdict-card ${verdict.tone}">
@@ -877,23 +937,24 @@ function renderReportOverview(model) {
 
 function renderOverviewTab(model) {
   const primaryDescription = model.productSummary || model.productDescription;
-  const descriptionLabel = model.productSummary ? "AI product summary" : "Product-page description";
+  const descriptionLabel = model.productSummary ? "Product summary" : "Product-page description";
 
   return `
     <section class="stack">
       ${renderPassportReadiness(model)}
+      ${renderDeepPageReadEvidence(model)}
       ${renderEvidenceChecklist(model)}
       <div class="content-grid">
-      ${renderSummaryCard(descriptionLabel, primaryDescription, "No product description was found in the normalized page evidence.", { wide: true })}
-      ${renderSummaryCard("Material insight", model.material, "Material was not found on the product page.", { detail: model.materialExplanation })}
-      ${renderSummaryCard("Care guidance", model.care, "No clear care instructions were found.")}
-      ${renderSummaryCard("Origin/manufacturing", model.origin, "No clear origin or manufacturing information was found.")}
-      ${renderSummaryCard("Supplier / factory", model.supplierDetails, "Supplier, factory, country, address, or employee count was not found.")}
-      ${renderSummaryCard("Product identifiers", model.identifiers, "Product, SKU, GTIN, or size identifiers were not found.")}
-      ${renderSummaryCard("Color / variant", model.colorVariant, "Color or selected variant data was not found.")}
-      ${renderSummaryCard("Certifications", model.certifications.length ? model.certifications.join(" ") : "", "No certification or standard reference was found on the product page.")}
-      ${renderSummaryCard("Conclusion", model.conclusion, "The scan finished, but the current analyzer did not return a conclusion.", { wide: true })}
-      ${renderSummaryCard("Brand context", model.brandInsight.summary, "No public brand context was found.", { wide: true })}
+      ${renderSummaryCard(descriptionLabel, primaryDescription, "Not found.", { wide: true })}
+      ${renderSummaryCard("Material insight", model.material, "Not found.")}
+      ${renderSummaryCard("Care guidance", model.care, "Not found.")}
+      ${renderSummaryCard("Origin/manufacturing", model.origin, "Not found.")}
+      ${renderSummaryCard("Supplier / factory", model.supplierDetails, "Not found.")}
+      ${renderSummaryCard("Product identifiers", model.identifiers, "Not found.")}
+      ${renderSummaryCard("Color / variant", model.colorVariant, "Not found.")}
+      ${renderSummaryCard("Certifications", model.certifications.length ? model.certifications.join(" ") : "", "Not found.")}
+      ${renderSummaryCard("Conclusion", model.conclusion, "Not found.", { wide: true })}
+      ${renderSummaryCard("Brand context", model.brandInsight.summary, "Not found.", { wide: true })}
       </div>
     </section>
   `;
@@ -906,9 +967,9 @@ function renderClaimsTab(model) {
 
   return `
     <section class="stack">
-      ${renderSummaryCard("Claim strength", `${model.claimScore}/100`, "No claim score was returned.", { detail: model.report.claimStrengthScore?.rationale, wide: true })}
+      ${renderSummaryCard("Claim strength", `${model.claimScore}/100`, "Not found.", { wide: true })}
       <div class="section-divider">
-        <span>AI claim analysis</span>
+        <span>Claim analysis</span>
       </div>
       ${claimRows}
       <div class="section-divider">
@@ -921,22 +982,13 @@ function renderClaimsTab(model) {
 }
 
 function renderDurabilityTab(model) {
-  const materialBreakdown = model.materialItems.length > 0
-    ? model.materialItems
-      .map((item) => [
-        item.percentage ? `${item.percentage} ${item.name}` : item.name,
-        item.explanation,
-      ].filter(Boolean).join(": "))
-      .join(" ")
-    : model.materialExplanation;
-
   return `
     <section class="stack">
       <div class="content-grid">
-        ${renderSummaryCard("Material insight", model.material, "Material composition was not found.", { detail: materialBreakdown, wide: true })}
-        ${renderSummaryCard("Care guidance", model.care, "Care instructions were not found.")}
-        ${renderSummaryCard("Origin/manufacturing", model.origin, "Country, factory, supplier, or traceability detail was not found.")}
-        ${renderSummaryCard("Supplier / factory", model.supplierDetails, "Supplier, factory, country, address, or employee count was not found.")}
+        ${renderSummaryCard("Material insight", model.material, "Not found.", { wide: true })}
+        ${renderSummaryCard("Care guidance", model.care, "Not found.")}
+        ${renderSummaryCard("Origin/manufacturing", model.origin, "Not found.")}
+        ${renderSummaryCard("Supplier / factory", model.supplierDetails, "Not found.")}
       </div>
       <div class="section-divider">
         <span>Product-page evidence</span>
@@ -1104,7 +1156,7 @@ function renderError(error, submittedUrl) {
   reportBody.innerHTML = `
     <article class="empty-row">
       <h3>No fallback report was generated</h3>
-      <p>This MVP only shows extracted or returned evidence. It does not fill the report with sample product data when the live read fails.</p>
+      <p>This report only shows extracted or returned evidence. It does not fill the report with sample product data when the live read fails.</p>
     </article>
   `;
   reportPanel.classList.remove("hidden");

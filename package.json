@@ -5,11 +5,12 @@
   "description": "Minimal MVP for generating a product passport report from a fashion product URL.",
   "scripts": {
     "dev": "node server.js",
-    "test": "node --test",
+    "test": "NODE_ENV=test node --test",
     "start": "node server.js"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
-    "openai": "^6.42.0"
+    "openai": "^6.42.0",
+    "playwright": "^1.60.0"
   }
 }
