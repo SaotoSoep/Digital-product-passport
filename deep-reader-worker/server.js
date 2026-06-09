@@ -3,6 +3,8 @@ const dns = require("dns").promises;
 const net = require("net");
 const { URL } = require("url");
 const { readDeepProductPage } = require("./lib/deep-reader");
+const packageJson = require("./package.json");
+const playwrightPackageJson = require("playwright/package.json");
 
 const port = Number(process.env.PORT || 8080);
 const maxBodyBytes = Number(process.env.MAX_BODY_BYTES || 65536);
@@ -180,7 +182,12 @@ function collectBody(request) {
 
 const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/health") {
-    sendJson(response, 200, { ok: true });
+    sendJson(response, 200, {
+      ok: true,
+      service: packageJson.name,
+      playwrightVersion: playwrightPackageJson.version,
+      nodeEnv: process.env.NODE_ENV || "",
+    });
     return;
   }
 
