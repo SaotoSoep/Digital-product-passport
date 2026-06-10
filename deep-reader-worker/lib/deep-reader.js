@@ -131,12 +131,12 @@ function textHash(text) {
 async function collectVisibleText(page, evidence, metadata) {
   const text = cleanText(await page.locator("body").innerText({ timeout: 5000 }).catch(() => ""));
   if (text.length < 20) {
-    return;
+    return false;
   }
 
-  const key = `${metadata.sectionLabel}:${textHash(text)}`;
+  const key = textHash(text);
   if (evidence.seenText.has(key)) {
-    return;
+    return false;
   }
 
   evidence.seenText.add(key);
@@ -148,6 +148,7 @@ async function collectVisibleText(page, evidence, metadata) {
     text: text.slice(0, 12000),
     timestamp: new Date().toISOString(),
   });
+  return true;
 }
 
 async function handleBlockers(page) {
@@ -198,19 +199,21 @@ async function handleBlockers(page) {
 async function progressiveScroll(page, evidence) {
   let previousHeight = 0;
   let stableSteps = 0;
+  let unchangedTextSteps = 0;
 
-  for (let step = 0; step < 14 && stableSteps < 3; step += 1) {
+  for (let step = 0; step < 10 && stableSteps < 2 && unchangedTextSteps < 3; step += 1) {
     const current = await page.evaluate(() => ({
       y: window.scrollY,
       height: document.documentElement.scrollHeight,
       viewport: window.innerHeight,
     }));
 
-    await collectVisibleText(page, evidence, {
+    const foundNewText = await collectVisibleText(page, evidence, {
       sectionLabel: `Scroll position ${step + 1}`,
       interactionType: "scroll",
       selector: "window",
     });
+    unchangedTextSteps = foundNewText ? 0 : unchangedTextSteps + 1;
 
     if (current.height === previousHeight && current.y + current.viewport >= current.height - 8) {
       stableSteps += 1;
@@ -220,11 +223,11 @@ async function progressiveScroll(page, evidence) {
 
     previousHeight = current.height;
     await page.evaluate(() => window.scrollBy(0, Math.floor(window.innerHeight * 0.75)));
-    await page.waitForLoadState("networkidle", { timeout: 2000 }).catch(() => page.waitForTimeout(350));
+    await page.waitForTimeout(250);
   }
 
   await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForLoadState("networkidle", { timeout: 1500 }).catch(() => {});
+  await page.waitForTimeout(100);
 }
 
 async function findInteractiveCandidates(page, clickedSelectors) {

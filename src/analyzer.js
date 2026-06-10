@@ -1921,16 +1921,20 @@ async function analyzeProductUrl(productUrl) {
   const fallbackNote = "Could not reliably read the product page. This report is based on limited available data.";
 
   let html;
-  let deepPageReadEvidence = await withTimeout(
+  const deepReadPromise = withTimeout(
     readProductPageDeepEvidence(productUrl),
     Number(process.env.DEEP_READER_WORKER_TIMEOUT_MS || 90000),
     createDeepReadTimeout(productUrl)
   );
+  const htmlPromise = fetchHtml(productUrl)
+    .then((value) => ({ value, error: null }))
+    .catch((error) => ({ value: null, error }));
+  const [deepPageReadResult, htmlResult] = await Promise.all([deepReadPromise, htmlPromise]);
+  let deepPageReadEvidence = deepPageReadResult;
   let productPageSnapshot;
 
-  try {
-    html = await fetchHtml(productUrl);
-  } catch (error) {
+  if (htmlResult.error) {
+    const error = htmlResult.error;
     const deepEvidenceHtml = buildDeepEvidenceHtml(deepPageReadEvidence);
     if (deepEvidenceHtml) {
       const inferredBrand = inferBrandFromUrl(productUrl);
@@ -1985,6 +1989,8 @@ async function analyzeProductUrl(productUrl) {
       deepPageReadEvidence
     );
     }
+  } else {
+    html = htmlResult.value;
   }
 
   const deepEvidenceHtml = buildDeepEvidenceHtml(deepPageReadEvidence);
@@ -2020,7 +2026,7 @@ async function analyzeProductUrl(productUrl) {
     return buildPartialReport(productUrl, retailer, fallbackNote, productPageSnapshot);
   }
 
-  const brandInsight = await withTimeout(
+  const brandInsightPromise = withTimeout(
     fetchBrandInsight({
       brand: productPageSnapshot.likelyBrand,
       productUrl,
@@ -2031,9 +2037,10 @@ async function analyzeProductUrl(productUrl) {
   );
 
   let aiReport;
+  let brandInsight;
 
   try {
-    aiReport = await analyzeTextWithOpenAi({
+    [brandInsight, aiReport] = await Promise.all([brandInsightPromise, analyzeTextWithOpenAi({
       productUrl,
       pageText: buildAiPageText({
         title,
@@ -2042,8 +2049,9 @@ async function analyzeProductUrl(productUrl) {
         bodyText,
         productPageSnapshot,
       }),
-    });
+    })]);
   } catch (error) {
+    brandInsight = await brandInsightPromise;
     return buildAiFailureReport({
       productUrl,
       retailer,
