@@ -1,4 +1,4 @@
-const DEFAULT_WORKER_TIMEOUT_MS = 45000;
+const DEFAULT_WORKER_TIMEOUT_MS = 90000;
 const MAX_WORKER_RESPONSE_CHARS = 750000;
 
 function cleanText(value) {
@@ -39,6 +39,20 @@ function workerFailureToInternalReason(reason) {
   return labels[normalized];
 }
 
+function workerFailureMode(reason) {
+  const normalized = normalizeFailureReason(reason);
+  if (normalized === "access_denied" || normalized === "blocked_by_bot_protection") {
+    return "Deep read blocked";
+  }
+  if (normalized === "timeout") {
+    return "Deep read timeout";
+  }
+  if (normalized === "unsupported_rendering_pattern") {
+    return "Deep read unsupported";
+  }
+  return "Deep read unavailable";
+}
+
 function createWorkerFailedDeepRead(sourceUrl, reason, status = "failed") {
   return {
     status,
@@ -57,6 +71,7 @@ function createWorkerFailedDeepRead(sourceUrl, reason, status = "failed") {
     structuredData: [],
     networkResponses: [],
     completedAt: new Date().toISOString(),
+    mode: workerFailureMode(reason),
   };
 }
 
@@ -108,7 +123,12 @@ function normalizeWorkerDeepReadResponse(payload, submittedUrl) {
     sourceUrl: cleanText(payload.sourceUrl || submittedUrl),
     finalUrl: cleanText(payload.finalUrl || payload.sourceUrl || submittedUrl),
     failureReason: payload.failureReason ? workerFailureToInternalReason(payload.failureReason) : "",
-    productionSource: "production_deep_read",
+    productionSource: "product_page_deep_read",
+    mode: payload.status === "success"
+      ? "Deep read successful"
+      : payload.status === "partial"
+      ? "Production deep read partial"
+      : workerFailureMode(payload.failureReason),
     counts: {
       tabsClicked: Number(summary.tabsClicked || 0),
       accordionsOpened: Number(summary.accordionsOpened || 0),
@@ -187,5 +207,6 @@ module.exports = {
   createWorkerFailedDeepRead,
   normalizeFailureReason,
   normalizeWorkerDeepReadResponse,
+  workerFailureMode,
   workerFailureToInternalReason,
 };

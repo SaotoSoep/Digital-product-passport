@@ -97,6 +97,24 @@ The existing Netlify deployment path still uses:
 
 The new passport lifecycle backend is currently wired into the local Node server first. Its schema is SQLite/D1-compatible so it can be moved to Sites/D1 when the hosting target is finalized.
 
+### Production deep reader worker
+
+Production deep page reading runs in the separate Render service at:
+
+```text
+https://deep-reader-worker.onrender.com/deep-read
+```
+
+Set these Netlify environment variables before deploying the frontend/functions:
+
+```bash
+npx netlify env:set DEEP_READER_WORKER_URL "https://deep-reader-worker.onrender.com/deep-read"
+npx netlify env:set DEEP_READER_WORKER_TIMEOUT_MS "90000"
+npx netlify deploy --prod --skip-functions-cache
+```
+
+The app treats worker failures such as `access_denied`, `blocked_by_bot_protection`, `timeout`, and `unsupported_rendering_pattern` as unavailable source evidence. These failures must not be interpreted as proof that the product page does not disclose the missing fields.
+
 ## Current limitations
 
 - Some retailer sites block or limit reliable server-side fetches

@@ -153,6 +153,18 @@ function statusBadge(status) {
   return `<span class="status-badge status-${normalized}">${statusLabel(normalized)}</span>`;
 }
 
+function evidenceSourceLabel(source) {
+  const labels = {
+    product_page_deep_read: "Product page deep read",
+    product_page_basic_extraction: "Product page basic extraction",
+    brand_page: "Brand page",
+    public_database: "Public database",
+    agent_interpretation: "Agent interpretation",
+  };
+
+  return labels[source] || displayText(source);
+}
+
 function displayText(value, emptyText = "") {
   return known(value) || known(emptyText);
 }
@@ -493,6 +505,8 @@ function extractModel(response, submittedUrl) {
     sourceUrl,
     brandInsight,
     deepPageReadEvidence: report.deepPageReadEvidence || metadata.deepPageReadEvidence || null,
+    deepReadMode: report.deepReadMode || report.deepPageReadEvidence?.mode || metadata.deepPageReadEvidence?.mode || "",
+    deepReadNote: report.deepReadNote || report.deepPageReadEvidence?.note || metadata.deepPageReadEvidence?.note || "",
     accessDiagnostics,
     passportReadiness,
     evidenceFields,
@@ -512,7 +526,18 @@ function renderDeepPageReadEvidence(model) {
   const evidence = model.deepPageReadEvidence;
 
   if (!evidence) {
-    return "";
+    return `
+      <article class="evidence-checklist">
+        <div class="checklist-header">
+          <div>
+            <span class="mini-label">Deep page read evidence</span>
+            <h3>Basic fallback used</h3>
+          </div>
+          <span class="coverage-pill">fallback</span>
+        </div>
+        <p class="source-line">Production deep read was not configured for this run. The report used basic product-page extraction only.</p>
+      </article>
+    `;
   }
 
   const counts = evidence.counts || {};
@@ -520,6 +545,13 @@ function renderDeepPageReadEvidence(model) {
     ? evidence.sectionLabels.map(cleanReadableText).filter(Boolean)
     : [];
   const status = displayText(evidence.status || "unknown");
+  const sourceUnavailable = status === "failed";
+  const mode = displayText(evidence.mode || model.deepReadMode || (
+    status === "success" ? "Deep read successful" :
+    status === "partial" ? "Production deep read partial" :
+    status === "failed" ? "Deep read blocked" :
+    "Basic fallback used"
+  ));
   const badgeStatus = status === "success"
     ? "found"
     : status === "skipped"
@@ -531,9 +563,9 @@ function renderDeepPageReadEvidence(model) {
       <div class="checklist-header">
         <div>
           <span class="mini-label">Deep page read evidence</span>
-          <h3>${escapeHtml(statusLabel(badgeStatus))}</h3>
+          <h3>${escapeHtml(mode)}</h3>
         </div>
-        <span class="coverage-pill">${escapeHtml(status)}</span>
+        <span class="coverage-pill">${escapeHtml(sourceUnavailable ? "Public/source evidence unavailable" : status)}</span>
       </div>
       <div class="checklist-grid">
         <div class="checklist-item found"><span>Tabs clicked</span><strong>${Number(counts.tabsClicked || 0)}</strong></div>
@@ -550,6 +582,11 @@ function renderDeepPageReadEvidence(model) {
       ${
         evidence.failureReason
           ? `<p class="source-line">Deep read note: ${escapeHtml(cleanReadableText(evidence.failureReason))}</p>`
+          : ""
+      }
+      ${
+        evidence.note || model.deepReadNote
+          ? `<p class="source-line">${escapeHtml(cleanReadableText(evidence.note || model.deepReadNote))}</p>`
           : ""
       }
     </article>
@@ -867,9 +904,9 @@ function renderReportOverview(model) {
   const verdict = buildVerdict(model);
   const transparencyRationale = known(model.report.transparencyScore?.rationale);
   const claimRationale = known(model.report.claimStrengthScore?.rationale);
-  const coverageSummary = model.extractionStatus === "failed"
+  const coverageSummary = model.deepReadNote || (model.extractionStatus === "failed"
     ? "Product-page extraction failed. Fallback values remain separated from product-page evidence."
-    : `Product-page extraction found ${model.foundCount} of ${model.checkedCount} relevant fields. Fields that were not found are listed separately in the Gaps tab. Fallback values remain separated from product-page evidence.`;
+    : `Product-page extraction found ${model.foundCount} of ${model.checkedCount} relevant fields. Fields that were not found are listed separately in the Gaps tab. Fallback values remain separated from product-page evidence.`);
 
   reportOverview.innerHTML = `
     <div class="verdict-card ${verdict.tone}">
@@ -1062,8 +1099,13 @@ function renderGapsTab(model) {
   const sourceRows = model.sources.length > 0
     ? model.sources.map((source) => `
         <article class="source-row">
-          <strong>${escapeHtml(displayText(source.type || "Source"))}</strong>
-          <span>${escapeHtml(cleanReadableText(source.label || ""))}</span>
+          <strong>${escapeHtml(evidenceSourceLabel(source.source || source.type) || "Source")}</strong>
+          <span>${escapeHtml(cleanReadableText(source.label || evidenceSourceLabel(source.source || source.type) || ""))}</span>
+          ${
+            source.source || source.type
+              ? `<small>${escapeHtml(evidenceSourceLabel(source.source || source.type))}</small>`
+              : ""
+          }
         </article>
       `).join("")
     : `<article class="source-row"><strong>Source</strong><span>${escapeHtml(model.submittedUrl)}</span></article>`;

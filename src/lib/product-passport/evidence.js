@@ -112,7 +112,7 @@ function normalizeFallback(fallback) {
 
   return {
     status: "fallback",
-    source: fallback.source || "mvp_report_fallback",
+    source: fallback.source || "agent_interpretation",
     sourceLabel: fallback.sourceLabel || "Report fallback",
     values,
     note: fallback.note || "Shown separately because no product-page value was found for this field.",
@@ -137,14 +137,14 @@ function buildField(snapshot, definition, fallbackByKey = {}) {
     sourceUrl: snapshot ? snapshot.sourceUrl : null,
     extractedAt: snapshot ? snapshot.extractionTimestamp : null,
     source: status === "found"
-      ? "submitted_product_page"
+      ? "product_page_basic_extraction"
       : status === "not_found"
-      ? "submitted_product_page_checked"
+      ? "product_page_basic_extraction"
       : "extraction_unavailable",
     sourceLabel: status === "found"
-      ? "Submitted product page"
+      ? "Product page basic extraction"
       : status === "not_found"
-      ? "Submitted product page checked"
+      ? "Product page basic extraction checked"
       : "Product page extraction unavailable",
     note: status === "found"
       ? "Found in publicly visible product-page data."

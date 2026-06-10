@@ -166,7 +166,14 @@ function buildMissingFields(evidence) {
     const status = fieldStatus(fields, key);
 
     if (status === "not_found" || status === "unavailable") {
-      missingFields.push({ key, label, detail });
+      missingFields.push({
+        key,
+        label,
+        detail: status === "unavailable"
+          ? "The product page source could not be fully checked, so this field is unavailable rather than confirmed absent."
+          : detail,
+        status,
+      });
     }
   }
 

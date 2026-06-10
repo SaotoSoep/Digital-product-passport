@@ -753,38 +753,69 @@ function calculateTransparencyScore(materialMatches, originMatches, careMatches,
 function buildSources(productUrl, extracted) {
   const sources = [
     {
-      type: "Product URL submitted by user",
+      source: "product_page_basic_extraction",
+      type: "product_page_basic_extraction",
       label: productUrl,
     },
   ];
 
   if (extracted.pageTitle) {
     sources.push({
-      type: "HTML title tag",
+      source: "product_page_basic_extraction",
+      type: "product_page_basic_extraction",
       label: extracted.pageTitle,
     });
   }
 
   if (extracted.metaDescription) {
     sources.push({
-      type: "Meta description",
+      source: "product_page_basic_extraction",
+      type: "product_page_basic_extraction",
       label: extracted.metaDescription,
     });
   }
 
   if (extracted.openGraphTitle) {
     sources.push({
-      type: "OpenGraph title",
+      source: "product_page_basic_extraction",
+      type: "product_page_basic_extraction",
       label: extracted.openGraphTitle,
     });
   }
 
   sources.push({
-    type: "Report limitation",
+    source: "agent_interpretation",
+    type: "agent_interpretation",
     label: "No broad web search, external registry lookup, or independent source check in this version",
   });
 
   return sources;
+}
+
+function sourceLabelForDeepReadFailure(reason) {
+  const text = cleanText(reason).toLowerCase();
+  if (/access denied|blocked by bot protection/.test(text)) {
+    return "Deep read blocked";
+  }
+  if (/timeout/.test(text)) {
+    return "Deep read timeout";
+  }
+  if (/unsupported rendering pattern/.test(text)) {
+    return "Deep read unsupported";
+  }
+  return "Deep read unavailable";
+}
+
+function deepReadBlockedNote() {
+  return "The product page could not be fully read from the production browser worker. Hidden sections may not have been accessible. Missing fields below should be interpreted as unavailable, not confirmed absent.";
+}
+
+function deepReadShouldMakeMissingUnavailable(deepPageReadEvidence) {
+  return Boolean(deepPageReadEvidence && deepPageReadEvidence.status === "failed");
+}
+
+function deepReadWasSuccessful(deepPageReadEvidence) {
+  return Boolean(deepPageReadEvidence && (deepPageReadEvidence.status === "success" || deepPageReadEvidence.status === "partial"));
 }
 
 function detectAccessIssue({ status, html, url }) {
@@ -1190,6 +1221,7 @@ async function fetchBrandInsight({ brand, productUrl, productHtml }) {
         }
 
         return {
+          source: "brand_page",
           topic: candidate.topic,
           label: candidate.label || candidate.topic,
           url: candidate.url,
@@ -1198,6 +1230,7 @@ async function fetchBrandInsight({ brand, productUrl, productHtml }) {
         };
       } catch (error) {
         return {
+          source: "brand_page",
           topic: candidate.topic,
           label: candidate.label || candidate.topic,
           url: candidate.url,
@@ -1305,6 +1338,7 @@ function collectReportFallbacks(report) {
   if (isUsefulFallbackValue(report.materialExplained && report.materialExplained.rawMaterial)) {
     fallbackByKey.materialComposition = {
       values: [report.materialExplained.rawMaterial],
+      source: "agent_interpretation",
       sourceLabel: "Report keyword fallback",
       note: "Derived from keyword analysis, not from the normalized product-page field.",
     };
@@ -1317,6 +1351,7 @@ function collectReportFallbacks(report) {
   if (claimValues.length > 0) {
     fallbackByKey.sustainabilityClaims = {
       values: claimValues,
+      source: "agent_interpretation",
       sourceLabel: "Report claim fallback",
       note: "Shown separately because the report detected claim-like wording outside the normalized snapshot field.",
     };
@@ -1325,6 +1360,7 @@ function collectReportFallbacks(report) {
   if (isUsefulFallbackValue(report.washingCareAdvice && report.washingCareAdvice.summary)) {
     fallbackByKey.careText = {
       values: [report.washingCareAdvice.summary],
+      source: "agent_interpretation",
       sourceLabel: "Report care fallback",
       note: "Derived from a care-text scan, not from the normalized product-page field.",
     };
@@ -1333,6 +1369,7 @@ function collectReportFallbacks(report) {
   if (isUsefulFallbackValue(report.productionOriginTransparency && report.productionOriginTransparency.detail)) {
     fallbackByKey.productionOrigin = {
       values: [report.productionOriginTransparency.detail],
+      source: "agent_interpretation",
       sourceLabel: "Report origin fallback",
       note: "Derived from an origin scan, not from the normalized product-page field.",
     };
@@ -1341,6 +1378,7 @@ function collectReportFallbacks(report) {
   if (isUsefulFallbackValue(report.supplierTransparency && report.supplierTransparency.detail)) {
     fallbackByKey.supplierDetails = {
       values: [report.supplierTransparency.detail],
+      source: "agent_interpretation",
       sourceLabel: "Report supplier fallback",
       note: "Derived from a supplier scan, not from the normalized product-page field.",
     };
@@ -1350,20 +1388,41 @@ function collectReportFallbacks(report) {
 }
 
 function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
-  if (!productPageEvidence || !deepPageReadEvidence || deepPageReadEvidence.status !== "failed") {
+  if (!productPageEvidence) {
+    return productPageEvidence;
+  }
+
+  if (deepReadWasSuccessful(deepPageReadEvidence)) {
+    const fields = productPageEvidence.fields || {};
+    for (const field of Object.values(fields)) {
+      if (field.status !== "found") {
+        continue;
+      }
+
+      field.source = "product_page_deep_read";
+      field.sourceLabel = "Product page deep read";
+      field.note = "Found after production browser reading, including visible page content and any opened product sections.";
+    }
+
+    return productPageEvidence;
+  }
+
+  if (!deepReadShouldMakeMissingUnavailable(deepPageReadEvidence)) {
     return productPageEvidence;
   }
 
   const fields = productPageEvidence.fields || {};
+  const sourceLabel = sourceLabelForDeepReadFailure(deepPageReadEvidence.failureReason);
+  const note = deepReadBlockedNote();
   for (const field of Object.values(fields)) {
     if (field.status !== "not_found") {
       continue;
     }
 
     field.status = "unavailable";
-    field.source = "deep_page_read_unavailable";
-    field.sourceLabel = "Deep page read unavailable";
-    field.note = `Deep page read failed: ${deepPageReadEvidence.failureReason || "unable to fully inspect the page"}.`;
+    field.source = "product_page_deep_read";
+    field.sourceLabel = sourceLabel;
+    field.note = note;
   }
 
   const fieldList = Object.values(fields);
@@ -1376,7 +1435,8 @@ function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
   productPageEvidence.foundFields = fieldList
     .filter((field) => field.status === "found")
     .map((field) => field.label);
-  productPageEvidence.summary = `Product-page extraction found ${productPageEvidence.foundFields.length} checked field(s). ${productPageEvidence.unavailableFields.length} field(s) could not be fully checked because deep page reading failed.`;
+  productPageEvidence.summary = `${note} Product-page extraction found ${productPageEvidence.foundFields.length} checked field(s). ${productPageEvidence.unavailableFields.length} field(s) remain unavailable.`;
+  productPageEvidence.deepReadNote = note;
 
   return productPageEvidence;
 }
@@ -1387,10 +1447,24 @@ function withProductPageEvidence(report, productPageSnapshot, deepPageReadEviden
     collectReportFallbacks(report)
   );
   const checkedProductPageEvidence = applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence);
+  const deepReadNote = deepReadShouldMakeMissingUnavailable(deepPageReadEvidence)
+    ? deepReadBlockedNote()
+    : "";
+  const deepReadMode = deepReadWasSuccessful(deepPageReadEvidence)
+    ? "Deep read successful"
+    : deepPageReadEvidence && deepPageReadEvidence.status === "failed"
+    ? "Deep read blocked"
+    : deepPageReadEvidence && deepPageReadEvidence.status === "skipped"
+    ? "Localhost/demo read"
+    : "Basic fallback used";
 
   return {
     ...report,
-    deepPageReadEvidence,
+    deepPageReadEvidence: deepPageReadEvidence
+      ? { ...deepPageReadEvidence, mode: deepPageReadEvidence.mode || deepReadMode, note: deepPageReadEvidence.note || deepReadNote }
+      : deepPageReadEvidence,
+    deepReadMode,
+    deepReadNote,
     productPageEvidence: checkedProductPageEvidence,
     passportReadiness: buildPassportReadiness(checkedProductPageEvidence, productPageSnapshot),
   };
@@ -1849,7 +1923,7 @@ async function analyzeProductUrl(productUrl) {
   let html;
   let deepPageReadEvidence = await withTimeout(
     readProductPageDeepEvidence(productUrl),
-    Number(process.env.DEEP_READER_WORKER_TIMEOUT_MS || 35000),
+    Number(process.env.DEEP_READER_WORKER_TIMEOUT_MS || 90000),
     createDeepReadTimeout(productUrl)
   );
   let productPageSnapshot;
