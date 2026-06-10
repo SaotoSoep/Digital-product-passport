@@ -17,6 +17,7 @@ const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const OPENAI_MODEL = "gpt-4o-mini";
 const AI_PAGE_TEXT_LIMIT = 8000;
+const MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS = 15000;
 
 const SYSTEM_PROMPT = `You are a product transparency analyst. You receive raw text scraped from a fashion or consumer product page and return a structured Product Passport Report as JSON.
 
@@ -1453,7 +1454,7 @@ function withProductPageEvidence(report, productPageSnapshot, deepPageReadEviden
   const deepReadMode = deepReadWasSuccessful(deepPageReadEvidence)
     ? "Deep read successful"
     : deepPageReadEvidence && deepPageReadEvidence.status === "failed"
-    ? "Deep read blocked"
+    ? deepPageReadEvidence.mode || sourceLabelForDeepReadFailure(deepPageReadEvidence.failureReason)
     : deepPageReadEvidence && deepPageReadEvidence.status === "skipped"
     ? "Localhost/demo read"
     : "Basic fallback used";
@@ -1891,13 +1892,13 @@ async function fetchHtml(productUrl, timeoutMs = 10000) {
   }
 }
 
-async function readProductPageDeepEvidence(productUrl) {
-  const workerResult = await callDeepReaderWorker(productUrl);
+async function readProductPageDeepEvidence(productUrl, timeoutMs) {
+  const workerResult = await callDeepReaderWorker(productUrl, { timeoutMs });
   if (workerResult) {
     return workerResult;
   }
 
-  return readDeepProductPage(productUrl);
+  return readDeepProductPage(productUrl, { timeoutMs });
 }
 
 function createDeepReadTimeout(productUrl) {
@@ -1919,11 +1920,18 @@ async function analyzeProductUrl(productUrl) {
 
   const retailer = parsedUrl.hostname.replace(/^www\./, "");
   const fallbackNote = "Could not reliably read the product page. This report is based on limited available data.";
+  const configuredDeepReaderTimeoutMs = Number(
+    process.env.DEEP_READER_WORKER_TIMEOUT_MS || MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS
+  );
+  const deepReaderTimeoutMs = Math.min(
+    Math.max(configuredDeepReaderTimeoutMs, 5000),
+    MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS
+  );
 
   let html;
   const deepReadPromise = withTimeout(
-    readProductPageDeepEvidence(productUrl),
-    Number(process.env.DEEP_READER_WORKER_TIMEOUT_MS || 90000),
+    readProductPageDeepEvidence(productUrl, deepReaderTimeoutMs),
+    deepReaderTimeoutMs + 500,
     createDeepReadTimeout(productUrl)
   );
   const htmlPromise = fetchHtml(productUrl)
