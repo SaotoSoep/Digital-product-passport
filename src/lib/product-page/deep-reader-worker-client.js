@@ -11,6 +11,7 @@ function normalizeFailureReason(reason) {
     "blocked_by_bot_protection",
     "access_denied",
     "timeout",
+    "no_relevant_interactive_sections_found",
     "unsupported_rendering_pattern",
     "unknown_error",
   ]);
@@ -22,6 +23,7 @@ function normalizeFailureReason(reason) {
   if (/bot|captcha|verification/.test(normalized)) return "blocked_by_bot_protection";
   if (/access|denied|forbidden/.test(normalized)) return "access_denied";
   if (/timeout|timed_out/.test(normalized)) return "timeout";
+  if (/no_relevant_interactive|no_interactive_sections/.test(normalized)) return "no_relevant_interactive_sections_found";
   if (/unsupported|rendering|playwright|chromium/.test(normalized)) return "unsupported_rendering_pattern";
   return "unknown_error";
 }
@@ -32,6 +34,7 @@ function workerFailureToInternalReason(reason) {
     blocked_by_bot_protection: "blocked by bot protection",
     access_denied: "access denied",
     timeout: "page timeout",
+    no_relevant_interactive_sections_found: "no relevant interactive sections found",
     unsupported_rendering_pattern: "unsupported rendering pattern",
     unknown_error: "unknown error",
   };
@@ -46,6 +49,9 @@ function workerFailureMode(reason) {
   }
   if (normalized === "timeout") {
     return "Deep read timeout";
+  }
+  if (normalized === "no_relevant_interactive_sections_found") {
+    return "Production deep read partial";
   }
   if (normalized === "unsupported_rendering_pattern") {
     return "Deep read unsupported";

@@ -159,7 +159,7 @@ async function handleBlockers(page) {
       }
       function hasAny(value, keywords) {
         const lower = clean(value).toLowerCase();
-        return keywords.some((keyword) => lower.includes(keyword));
+        return keywords.some((keyword) => keyword.length <= 2 ? lower === keyword : lower.includes(keyword));
       }
       function selectorFor(element) {
         if (element.id) return `#${CSS.escape(element.id)}`;
@@ -201,7 +201,7 @@ async function progressiveScroll(page, evidence) {
   let stableSteps = 0;
   let unchangedTextSteps = 0;
 
-  for (let step = 0; step < 10 && stableSteps < 2 && unchangedTextSteps < 3; step += 1) {
+  for (let step = 0; step < 8 && stableSteps < 2 && unchangedTextSteps < 3; step += 1) {
     const current = await page.evaluate(() => ({
       y: window.scrollY,
       height: document.documentElement.scrollHeight,
@@ -223,7 +223,7 @@ async function progressiveScroll(page, evidence) {
 
     previousHeight = current.height;
     await page.evaluate(() => window.scrollBy(0, Math.floor(window.innerHeight * 0.75)));
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(150);
   }
 
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -272,20 +272,41 @@ async function findInteractiveCandidates(page, clickedSelectors) {
         const rect = element.getBoundingClientRect();
         const role = element.getAttribute("role") || element.tagName.toLowerCase();
         const expanded = element.getAttribute("aria-expanded");
-        const type = role === "tab"
+        const controls = element.getAttribute("aria-controls") || "";
+        const tagName = element.tagName.toLowerCase();
+        const navigatesAway = tagName === "a" && href && !href.startsWith("#") && !controls;
+        const controlledSelector = controls
+          ? `#${CSS.escape(controls)}`
+          : href.startsWith("#") && href.length > 1
+          ? `#${CSS.escape(href.slice(1))}`
+          : "";
+        const tabHint = role === "tab" || /tab/i.test([
+          element.getAttribute("data-toggle"),
+          element.getAttribute("data-bs-toggle"),
+          element.getAttribute("data-tab"),
+        ].filter(Boolean).join(" "));
+        const type = tabHint
           ? "tab"
           : (role === "summary" || element.tagName.toLowerCase() === "summary" || expanded === "false")
           ? "accordion"
           : hasAny(text, expandKeywords)
           ? "read_more"
           : "section_control";
-        return { text, href, selector, role, type, visible: rect.width > 0 && rect.height > 0 };
+        const sectionMatch = hasAny(text, sectionKeywords);
+        const expandMatch = hasAny(text, expandKeywords);
+        const score = (sectionMatch ? 100 : 0) +
+          (expandMatch ? 60 : 0) +
+          (role === "tab" ? 20 : 0) +
+          (expanded === "false" ? 10 : 0);
+        return { text, href, selector, controlledSelector, role, type, score, sectionMatch, expandMatch, navigatesAway, visible: rect.width > 0 && rect.height > 0 };
       })
       .filter((item) => item.visible && item.selector && !clicked.includes(item.selector))
+      .filter((item) => !item.navigatesAway)
       .filter((item) => !item.href || !/^https?:\/\//i.test(item.href))
       .filter((item) => !hasAny(`${item.text} ${item.href}`, dangerousKeywords))
-      .filter((item) => hasAny(item.text, sectionKeywords) || hasAny(item.text, expandKeywords) || item.role === "tab")
-      .slice(0, 35);
+      .filter((item) => item.sectionMatch || item.expandMatch)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 12);
   }, {
     sectionKeywords: SECTION_KEYWORDS.map((item) => item.toLowerCase()),
     expandKeywords: EXPAND_KEYWORDS.map((item) => item.toLowerCase()),
@@ -297,7 +318,7 @@ async function findInteractiveCandidates(page, clickedSelectors) {
 async function clickRelevantControls(page, evidence) {
   const clickedSelectors = new Set();
 
-  for (let pass = 0; pass < 4; pass += 1) {
+  for (let pass = 0; pass < 2 && clickedSelectors.size < 12; pass += 1) {
     const candidates = await findInteractiveCandidates(page, clickedSelectors);
     if (candidates.length === 0) {
       break;
@@ -312,7 +333,7 @@ async function clickRelevantControls(page, evidence) {
       const before = textHash(await page.locator("body").innerText({ timeout: 3000 }).catch(() => ""));
       const locator = page.locator(candidate.selector).first();
       await locator.scrollIntoViewIfNeeded({ timeout: 1500 }).catch(() => {});
-      const clicked = await locator.click({ timeout: 2500 }).then(() => true).catch(() => false);
+      const clicked = await locator.click({ timeout: 1500 }).then(() => true).catch(() => false);
       if (!clicked) {
         continue;
       }
@@ -324,18 +345,40 @@ async function clickRelevantControls(page, evidence) {
           hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
         }
         return `${text.length}:${hash}` !== previous;
-      }, before, { timeout: 2500 }).catch(() => page.waitForTimeout(300));
+      }, before, { timeout: 1200 }).catch(() => page.waitForTimeout(200));
 
       if (candidate.type === "tab") evidence.counts.tabsClicked += 1;
       else if (candidate.type === "accordion") evidence.counts.accordionsOpened += 1;
       else if (candidate.type === "read_more") evidence.counts.readMoreExpanded += 1;
 
       evidence.sectionLabels.add(candidate.text || candidate.type);
-      await collectVisibleText(page, evidence, {
-        sectionLabel: candidate.text || candidate.type,
-        interactionType: candidate.type,
-        selector: candidate.selector,
-      });
+      let collectedTarget = false;
+      if (candidate.controlledSelector) {
+        const targetText = cleanText(await page.locator(candidate.controlledSelector).innerText({ timeout: 2500 }).catch(() => ""));
+        if (targetText.length >= 20) {
+          const key = textHash(targetText);
+          if (!evidence.seenText.has(key)) {
+            evidence.seenText.add(key);
+            evidence.textEvidence.push({
+              sourceUrl: page.url(),
+              sectionLabel: candidate.text || candidate.type,
+              interactionType: candidate.type,
+              selector: candidate.controlledSelector,
+              text: targetText.slice(0, 12000),
+              timestamp: new Date().toISOString(),
+            });
+          }
+          collectedTarget = true;
+        }
+      }
+
+      if (!collectedTarget) {
+        await collectVisibleText(page, evidence, {
+          sectionLabel: candidate.text || candidate.type,
+          interactionType: candidate.type,
+          selector: candidate.selector,
+        });
+      }
     }
   }
 }

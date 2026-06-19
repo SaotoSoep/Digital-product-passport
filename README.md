@@ -109,7 +109,7 @@ Set these Netlify environment variables before deploying the frontend/functions:
 
 ```bash
 npx netlify env:set DEEP_READER_WORKER_URL "https://deep-reader-worker.onrender.com/deep-read"
-npx netlify env:set DEEP_READER_WORKER_TIMEOUT_MS "90000"
+npx netlify env:set DEEP_READER_WORKER_TIMEOUT_MS "30000"
 npx netlify deploy --prod --skip-functions-cache
 ```
 

@@ -348,6 +348,71 @@ function renderSummaryCard(label, value, emptyText, options = {}) {
   `;
 }
 
+function splitLabeledFacts(values) {
+  const facts = [];
+  const seen = new Set();
+  const topLevelLabels = "Supplier|Country|Factory|Address|Employees|Product no\\.|Product SKU|Internal product ID|GTIN|Size identifiers";
+  const separator = new RegExp(`;\\s*(?=(?:${topLevelLabels}):)`, "i");
+
+  for (const value of values) {
+    for (const part of cleanReadableText(value).split(separator)) {
+      const match = part.match(/^([^:]+):\s*(.+)$/) ||
+        part.match(/^(Product no\.|Product SKU|Internal product ID)\s+(.+)$/i);
+      const rawLabel = cleanReadableText(match ? match[1] : "");
+      const label = rawLabel.toLowerCase() === "country of origin" ? "Country" : rawLabel;
+      const detail = cleanReadableText(match ? match[2] : part);
+      const key = `${label.toLowerCase()}\u0000${detail.toLowerCase()}`;
+
+      if (!detail || seen.has(key)) {
+        continue;
+      }
+
+      facts.push({ label, detail });
+      seen.add(key);
+    }
+  }
+
+  return facts;
+}
+
+function renderStructuredSummaryCard(label, values, emptyText, options = {}) {
+  const includedLabels = new Set((options.includeLabels || []).map((value) => value.toLowerCase()));
+  const labelOrder = (options.labelOrder || []).map((value) => value.toLowerCase());
+  const seenLabels = new Set();
+  const facts = splitLabeledFacts(values).filter((fact) => (
+    includedLabels.size === 0 || includedLabels.has(fact.label.toLowerCase())
+  )).filter((fact) => {
+    const key = fact.label.toLowerCase();
+
+    if (!options.uniqueLabels || !key || !seenLabels.has(key)) {
+      if (key) seenLabels.add(key);
+      return true;
+    }
+
+    return false;
+  }).sort((left, right) => {
+    const leftIndex = labelOrder.indexOf(left.label.toLowerCase());
+    const rightIndex = labelOrder.indexOf(right.label.toLowerCase());
+    const leftRank = leftIndex === -1 ? labelOrder.length : leftIndex;
+    const rightRank = rightIndex === -1 ? labelOrder.length : rightIndex;
+    return leftRank - rightRank;
+  });
+
+  return `
+    <article class="summary-block ${options.wide ? "wide" : ""}">
+      <span class="mini-label">${escapeHtml(label)}</span>
+      ${facts.length > 0
+        ? `<dl class="summary-facts">${facts.map((fact) => `
+            <div>
+              ${fact.label ? `<dt>${escapeHtml(fact.label)}</dt>` : ""}
+              <dd>${escapeHtml(fact.detail)}</dd>
+            </div>
+          `).join("")}</dl>`
+        : `<p class="muted">${escapeHtml(cleanReadableText(emptyText))}</p>`}
+    </article>
+  `;
+}
+
 function renderStages(activeIndex = -1, mode = "idle") {
   stageList.innerHTML = stages
     .map((stage, index) => {
@@ -407,10 +472,12 @@ function extractModel(response, submittedUrl) {
     fields.productIdentifiers,
     ""
   );
+  const identifierValues = fieldValues(fields.productIdentifiers);
   const colorVariant = fieldDisplayValue(
     fields.colorVariant,
     ""
   );
+  const colorVariantValues = fieldValues(fields.colorVariant);
   const productSummary = known(report.productSummary);
   const rawProductDescription = fieldDisplayValue(
     fields.productDescription,
@@ -426,11 +493,17 @@ function extractModel(response, submittedUrl) {
     fields.productionOrigin,
     ""
   );
+  const originValues = fieldValues(fields.productionOrigin);
   const origin = evidenceOrigin || usefulReportText(report.productionOriginTransparency?.detail) || "Origin/manufacturing information not found";
   const evidenceSupplierDetails = fieldDisplayValue(
     fields.supplierDetails,
     ""
   );
+  const supplierDetailValues = fieldValues(fields.supplierDetails);
+  const productionOriginValues = [
+    ...supplierDetailValues,
+    ...originValues,
+  ];
   const supplierDetails = evidenceSupplierDetails || usefulReportText(report.supplierTransparency?.detail) || "Supplier/factory information not found";
   const certifications = fieldValues(fields.certifications);
   const durabilityClaims = fieldValues(fields.durabilityClaims);
@@ -485,14 +558,19 @@ function extractModel(response, submittedUrl) {
     materialExplanation,
     materialItems,
     identifiers,
+    identifierValues,
     colorVariant,
+    colorVariantValues,
     productDescription,
     rawProductDescription,
     care,
     evidenceCare,
     supplierDetails,
+    supplierDetailValues,
+    productionOriginValues,
     evidenceSupplierDetails,
     origin,
+    originValues,
     evidenceOrigin,
     certifications,
     durabilityClaims,
@@ -985,10 +1063,18 @@ function renderOverviewTab(model) {
       ${renderSummaryCard(descriptionLabel, primaryDescription, "Not found.", { wide: true })}
       ${renderSummaryCard("Material insight", model.material, "Not found.")}
       ${renderSummaryCard("Care guidance", model.care, "Not found.")}
-      ${renderSummaryCard("Origin/manufacturing", model.origin, "Not found.")}
-      ${renderSummaryCard("Supplier / factory", model.supplierDetails, "Not found.")}
-      ${renderSummaryCard("Product identifiers", model.identifiers, "Not found.")}
-      ${renderSummaryCard("Color / variant", model.colorVariant, "Not found.")}
+      ${renderStructuredSummaryCard("Production Origin", model.productionOriginValues, "Not found.", {
+        wide: true,
+        includeLabels: ["Country", "Supplier", "Factory", "Address", "Employees"],
+        labelOrder: ["Country", "Supplier", "Factory", "Address", "Employees"],
+        uniqueLabels: true,
+      })}
+      ${renderStructuredSummaryCard("Product identifiers", model.identifierValues, "Not found.")}
+      ${renderStructuredSummaryCard("Color / variant", model.colorVariantValues, "Not found.", {
+        includeLabels: ["Color", "Color reference"],
+        labelOrder: ["Color", "Color reference"],
+        uniqueLabels: true,
+      })}
       ${renderSummaryCard("Certifications", model.certifications.length ? model.certifications.join(" ") : "", "Not found.")}
       ${renderSummaryCard("Conclusion", model.conclusion, "Not found.", { wide: true })}
       ${renderSummaryCard("Brand context", model.brandInsight.summary, "Not found.", { wide: true })}
@@ -1024,8 +1110,12 @@ function renderDurabilityTab(model) {
       <div class="content-grid">
         ${renderSummaryCard("Material insight", model.material, "Not found.", { wide: true })}
         ${renderSummaryCard("Care guidance", model.care, "Not found.")}
-        ${renderSummaryCard("Origin/manufacturing", model.origin, "Not found.")}
-        ${renderSummaryCard("Supplier / factory", model.supplierDetails, "Not found.")}
+        ${renderStructuredSummaryCard("Production Origin", model.productionOriginValues, "Not found.", {
+          wide: true,
+          includeLabels: ["Country", "Supplier", "Factory", "Address", "Employees"],
+          labelOrder: ["Country", "Supplier", "Factory", "Address", "Employees"],
+          uniqueLabels: true,
+        })}
       </div>
       <div class="section-divider">
         <span>Product-page evidence</span>

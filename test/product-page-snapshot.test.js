@@ -57,6 +57,22 @@ test("marks absent product page fields as not_found or empty", () => {
   assert(snapshot.extractionNotes.some((note) => note.includes("material/composition text: not_found")));
 });
 
+test("does not treat country-of-origin prose as supplier table data", () => {
+  const snapshot = extractProductPageSnapshot(
+    `<!doctype html><html><head><title>Repairable overshirt</title></head><body>
+      <h1>Repairable overshirt</h1>
+      <p>Country of origin: made in Portugal.</p>
+      <p>Durability: reinforced seams and a two-year repair guarantee.</p>
+    </body></html>`,
+    "https://shop.example/products/repairable-overshirt",
+    new Date("2026-06-19T12:00:00.000Z")
+  );
+
+  assert.deepEqual(snapshot.supplierDetailText, []);
+  assert(snapshot.originText.some((value) => /Country of origin: made in Portugal/i.test(value)));
+  assert(!snapshot.originText.some((value) => /Durability:/i.test(value)));
+});
+
 test("normalizes material composition from noisy product information text", () => {
   const snapshot = extractProductPageSnapshot(
     `<!DOCTYPE html>
@@ -125,12 +141,16 @@ test("extracts embedded commerce data from a COS-style product payload", () => {
   assert.equal(snapshot.likelyBrand, "COS");
   assert.equal(snapshot.likelyProductName, "KNITTED LINEN HENLEY T-SHIRT");
   assert(snapshot.productIdentifiersText.some((value) => /1340205001/.test(value)));
+  assert(!snapshot.productIdentifiersText.some((value) => /^Price:/i.test(value)));
   assert(snapshot.colorText.some((value) => /DARK BROWN/.test(value)));
+  assert(!snapshot.colorText.some((value) => /^Category:/i.test(value)));
+  assert.equal(snapshot.structuredProductData.category, undefined);
   assert.deepEqual(snapshot.materialCompositionText, ["Shell: 86% Linen, 14% Polyamide"]);
   assert(snapshot.supplierDetailText.some((value) => /Supplier: SHANGHAI JINGRONG/.test(value)));
   assert(snapshot.supplierDetailText.some((value) => /Employees: 659/.test(value)));
   assert(snapshot.originText.some((value) => /SHANGHAI JINGRONG/.test(value)));
-  assert(snapshot.originText.some((value) => /659 workers/.test(value)));
+  assert(snapshot.originText.some((value) => /Country: Mainland China/.test(value)));
+  assert(!snapshot.originText.some((value) => /659 workers|Employees:/i.test(value)));
   assert(snapshot.careText.some((value) => /Machine wash cold/.test(value)));
 });
 
