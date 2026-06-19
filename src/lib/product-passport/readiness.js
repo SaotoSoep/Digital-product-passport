@@ -202,7 +202,7 @@ function buildReadyFields(evidence) {
   }
 
   addReadyField(readyFields, fields, "productIdentifiers", "Commercial identifiers", "Product/SKU, GTIN, size-level identifiers, price, or season code were found.");
-  addReadyField(readyFields, fields, "colorVariant", "Colour and variant", "Selected colour, colour reference, or category data was found.");
+  addReadyField(readyFields, fields, "colorVariant", "Colour and variant", "Selected colour or colour reference data was found.");
   addReadyField(readyFields, fields, "productDescription", "Description and construction", "Description, fit, closure, or construction information was found.", 1);
   addReadyField(readyFields, fields, "materialComposition", "Material composition", "Composition data can be used as a passport starting point.");
   addReadyField(readyFields, fields, "careText", "Care and use", "Care instructions can support use-phase guidance.");

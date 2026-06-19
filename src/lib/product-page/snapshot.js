@@ -725,6 +725,33 @@ function buildSupplierDetailText(supplierDetails) {
     .filter(Boolean);
 }
 
+function buildProductionOriginText(supplierDetails) {
+  return (supplierDetails || [])
+    .map((supplier) => cleanText([
+      supplier.country ? `Country: ${supplier.country}` : "",
+      supplier.factoryName ? `Factory: ${supplier.factoryName}` : "",
+    ].filter(Boolean).join("; ")))
+    .filter(Boolean);
+}
+
+function buildProductionOriginTextFromRows(rows) {
+  return (rows || [])
+    .map((row) => {
+      const facts = {};
+      const pattern = /(?:^|;\s*)(Country|Factory):\s*(.*?)(?=;\s*(?:Supplier|Country|Factory|Address|Employees|Workers):|$)/gi;
+
+      for (const match of cleanText(row).matchAll(pattern)) {
+        facts[match[1].toLowerCase()] = cleanText(match[2]);
+      }
+
+      return cleanText([
+        facts.country ? `Country: ${facts.country}` : "",
+        facts.factory ? `Factory: ${facts.factory}` : "",
+      ].filter(Boolean).join("; "));
+    })
+    .filter(Boolean);
+}
+
 function parseGtinValues(value) {
   const parsed = parseNestedJson(value);
   const values = [];
@@ -772,9 +799,6 @@ function normalizeEmbeddedProductData(candidate) {
       })
       .filter(Boolean)
     : [];
-  const category = Array.isArray(candidate.categoryName)
-    ? candidate.categoryName.map(cleanText).filter(Boolean).join(" > ")
-    : cleanText(candidate.categoryUri || "");
   const color = cleanText(candidate.variantName || candidate.defaultVariantName || candidate.var_colour_desc_desc || candidate.var_pdp_color_desc || "");
   const colorHex = cleanText(candidate.var_colour_details_desc || (candidate.var_color && candidate.var_color.hex) || "");
 
@@ -788,7 +812,6 @@ function normalizeEmbeddedProductData(candidate) {
     brandName: cleanText(candidate.brandName || candidate.pr_external_brand || ""),
     variantName: color,
     colorHex,
-    category,
     price: cleanText(candidate.price || ""),
     netWeight: cleanText(candidate.var_net_weight_desc || ""),
     weightUnit: cleanText(candidate.var_weight_unit || ""),
@@ -821,11 +844,6 @@ function buildIdentifierText(embeddedProductData) {
   if (embeddedProductData.productId) values.push(`Internal product ID ${embeddedProductData.productId}`);
   if (embeddedProductData.gtins.length > 0) values.push(`GTIN: ${embeddedProductData.gtins.join(", ")}`);
   if (embeddedProductData.itemIdentifiers.length > 0) values.push(`Size identifiers: ${embeddedProductData.itemIdentifiers.join("; ")}`);
-  if (embeddedProductData.price) values.push(`Price: ${embeddedProductData.price}`);
-  if (embeddedProductData.netWeight) {
-    values.push(`Net weight: ${embeddedProductData.netWeight}${embeddedProductData.weightUnit ? ` ${embeddedProductData.weightUnit}` : ""}`);
-  }
-  if (embeddedProductData.season) values.push(`Season code: ${embeddedProductData.season}`);
 
   return uniqueValues(values, 8);
 }
@@ -838,8 +856,7 @@ function buildColorText(embeddedProductData) {
   return uniqueValues([
     embeddedProductData.variantName ? `Color: ${embeddedProductData.variantName}` : "",
     embeddedProductData.colorHex ? `Color reference: ${embeddedProductData.colorHex}` : "",
-    embeddedProductData.category ? `Category: ${embeddedProductData.category}` : "",
-  ], 4);
+  ], 2);
 }
 
 function splitIntoSnippets(text) {
@@ -882,6 +899,13 @@ function findSnippets(snippets, keywords, limit = 3) {
 
 function snippetHasSupplierDetailKeyword(snippet) {
   const normalized = cleanText(snippet).toLowerCase();
+  if (
+    /\bcountry of origin\b/.test(normalized) &&
+    !/\b(supplier|leverancier|factory|fabriek|address|employees|workers)\b/.test(normalized)
+  ) {
+    return false;
+  }
+
   return SUPPLIER_DETAIL_KEYWORDS.some((keyword) =>
     normalized.includes(keyword.toLowerCase())
   );
@@ -939,7 +963,7 @@ function extractSupplierPairsFromPlainText(text) {
     }
   }
 
-  return rows;
+  return rows.length >= 2 ? rows : [];
 }
 
 function findSupplierDetailSnippets(html, snippets, bodyText, embeddedProductData, limit = 8) {
@@ -1295,6 +1319,12 @@ function extractProductPageSnapshot(html, sourceUrl, now = new Date()) {
     bodyText,
     embeddedProductData
   );
+  const structuredProductionOrigin = buildProductionOriginText(
+    embeddedProductData && embeddedProductData.supplierDetails
+  );
+  const visibleProductionOrigin = buildProductionOriginTextFromRows(supplierDetailSnippets);
+  const generalOriginSnippets = findSnippets(fieldSnippets, ORIGIN_KEYWORDS)
+    .filter((snippet) => !snippetHasSupplierDetailKeyword(snippet));
 
   const snapshot = {
     sourceUrl,
@@ -1335,9 +1365,9 @@ function extractProductPageSnapshot(html, sourceUrl, now = new Date()) {
     sustainabilityClaimSnippets: sustainabilitySnippets,
     supplierDetailText: supplierDetailSnippets,
     originText: uniqueValues([
-      ...supplierDetailSnippets,
-      ...((embeddedProductData && embeddedProductData.supplierInfo) || []),
-      ...findSnippets(fieldSnippets, ORIGIN_KEYWORDS),
+      ...structuredProductionOrigin,
+      ...visibleProductionOrigin,
+      ...generalOriginSnippets,
       ...jsonLdOriginText,
     ]),
     certificationText: findSnippets(fieldSnippets, CERTIFICATION_KEYWORDS),

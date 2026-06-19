@@ -17,7 +17,9 @@ const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const OPENAI_MODEL = "gpt-4o-mini";
 const AI_PAGE_TEXT_LIMIT = 8000;
-const MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS = 15000;
+const DEFAULT_ANALYSIS_DEEP_READER_TIMEOUT_MS = 25000;
+const MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS = 30000;
+const MIN_LOCAL_DEEP_READER_FALLBACK_MS = 5000;
 
 const SYSTEM_PROMPT = `You are a product transparency analyst. You receive raw text scraped from a fashion or consumer product page and return a structured Product Passport Report as JSON.
 
@@ -27,6 +29,12 @@ Rules:
 - Clearly distinguish between: brand_claim (what the brand says), public_evidence (what is verifiable from the page), and unknown (not found or not verifiable).
 - Use confidence levels: "high", "medium", or "low" based only on what is explicitly stated on the page.
 - If a field cannot be determined, use null. Do not guess.
+- Keep structured facts atomic and concise. Do not paste a combined supplier/manufacturing sentence into multiple fields.
+- For origin, return only the manufacturing country, factory name, supplier name, factory address, and employee count when explicitly present.
+- Do not include price, weight, season, category, colour, or prose descriptions in product identifiers.
+- Preserve identifier labels (for example Product no., SKU, GTIN, or size) and never merge different identifiers into an unlabeled string.
+- Treat product categories and navigation breadcrumbs as page context only. Never include them in colour, variant, identifier, origin, or other product-passport fields.
+- For colour or variant information, keep only an explicitly stated colour/variant name and an explicit colour reference such as a hex code.
 - For sustainability_claims: if a claim has no supporting certificate or third-party verification on the page, set type to "unverified" and confidence to "low".
 - The transparency_score and claim_strength_score are integers from 0 to 100. Base them on how much verifiable information is present, not on how sustainable the product sounds.
 
@@ -54,6 +62,9 @@ Return exactly this JSON structure, nothing else:
   "origin": {
     "country": "string or null",
     "factory": "string or null",
+    "supplier": "string or null",
+    "address": "string or null",
+    "employees": "string or null",
     "confidence": "high | medium | low"
   },
   "care_instructions": ["string"],
@@ -431,6 +442,9 @@ function normalizeAiReport(value) {
     origin: {
       country: origin.country === null ? null : cleanText(origin.country),
       factory: origin.factory === null ? null : cleanText(origin.factory),
+      supplier: origin.supplier === null ? null : cleanText(origin.supplier),
+      address: origin.address === null ? null : cleanText(origin.address),
+      employees: origin.employees === null ? null : cleanText(origin.employees),
       confidence: titleCaseConfidence(origin.confidence),
     },
     care_instructions: asCleanArray(report.care_instructions),
@@ -1562,6 +1576,7 @@ function withSnapshotFallbackAiReport(aiReport, productPageSnapshot) {
   const hasAiOrigin = Boolean(aiReport.origin.country || aiReport.origin.factory);
   const hasSnapshotOrigin = Boolean(snapshotOrigin.country || snapshotOrigin.factory);
   const origin = {
+    ...aiReport.origin,
     country: snapshotOrigin.country || aiReport.origin.country || null,
     factory: snapshotOrigin.factory || aiReport.origin.factory || null,
     confidence: hasAiOrigin || hasSnapshotOrigin
@@ -1609,6 +1624,13 @@ function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted,
     aiReport.origin.country ? `Country: ${aiReport.origin.country}` : "",
     aiReport.origin.factory ? `Factory: ${aiReport.origin.factory}` : "",
   ].filter(Boolean);
+  const aiSupplierDetails = [
+    aiReport.origin.supplier ? `Supplier: ${aiReport.origin.supplier}` : "",
+    aiReport.origin.country ? `Country: ${aiReport.origin.country}` : "",
+    aiReport.origin.factory ? `Factory: ${aiReport.origin.factory}` : "",
+    aiReport.origin.address ? `Address: ${aiReport.origin.address}` : "",
+    aiReport.origin.employees ? `Employees: ${aiReport.origin.employees}` : "",
+  ].filter(Boolean);
   const primaryMaterial = snapshotMaterialText || materialNames.join(", ") || "Material not confirmed";
   const materialExplanationText = aiReport.materials.length > 0
     ? aiReport.materials
@@ -1624,7 +1646,7 @@ function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted,
   const originDetail = snapshotOriginText || (originDetails.length > 0
     ? originDetails.join("; ")
     : "");
-  const supplierDetail = snapshotSupplierText || aiReport.origin.factory || "";
+  const supplierDetail = snapshotSupplierText || aiSupplierDetails.join("; ");
   const productSummary = aiReport.product_summary || snapshotDescriptionText ||
     `${retailer} product page analyzed, but limited product summary detail was available.`;
   const finalCareSummary = careSummary
@@ -1892,13 +1914,94 @@ async function fetchHtml(productUrl, timeoutMs = 10000) {
   }
 }
 
-async function readProductPageDeepEvidence(productUrl, timeoutMs) {
-  const workerResult = await callDeepReaderWorker(productUrl, { timeoutMs });
-  if (workerResult) {
+function deepReadEvidenceScore(result) {
+  if (!result) return -1;
+
+  const counts = result.counts || {};
+  const interactionCount = Number(counts.tabsClicked || 0) +
+    Number(counts.accordionsOpened || 0) +
+    Number(counts.readMoreExpanded || 0);
+  const evidenceCount = (result.textEvidence || []).length +
+    (result.structuredData || []).length +
+    (result.networkResponses || []).length;
+  const statusScore = result.status === "success" ? 100 : result.status === "partial" ? 40 : 0;
+
+  return statusScore + (interactionCount * 20) + (evidenceCount * 2);
+}
+
+function deepReadHasInteractiveEvidence(result) {
+  const counts = result && result.counts || {};
+  return Number(counts.tabsClicked || 0) +
+    Number(counts.accordionsOpened || 0) +
+    Number(counts.readMoreExpanded || 0) > 0;
+}
+
+async function readProductPageDeepEvidence(productUrl, timeoutMs, readers = {}) {
+  const readWorker = readers.worker || callDeepReaderWorker;
+  const readLocal = readers.local || readDeepProductPage;
+  const startedAt = Date.now();
+  const preferLocal = readers.preferLocal !== undefined
+    ? readers.preferLocal
+    : process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test";
+  let localResult = null;
+
+  if (preferLocal) {
+    const localTimeoutMs = Math.min(timeoutMs, 30000);
+    localResult = await withTimeout(
+      readLocal(productUrl, { timeoutMs: localTimeoutMs }),
+      localTimeoutMs + 500,
+      createDeepReadTimeout(productUrl)
+    );
+
+    if (localResult.status === "success" && deepReadHasInteractiveEvidence(localResult)) {
+      return localResult;
+    }
+  }
+
+  const remainingBeforeWorkerMs = timeoutMs - (Date.now() - startedAt);
+  if (remainingBeforeWorkerMs < 5000) {
+    return localResult || createDeepReadTimeout(productUrl);
+  }
+
+  const workerTimeoutMs = Math.max(
+    5000,
+    Math.min(remainingBeforeWorkerMs, remainingBeforeWorkerMs - MIN_LOCAL_DEEP_READER_FALLBACK_MS)
+  );
+  const workerResult = await readWorker(productUrl, { timeoutMs: workerTimeoutMs });
+
+  if (!workerResult) {
+    if (localResult) return localResult;
+
+    return withTimeout(
+      readLocal(productUrl, { timeoutMs }),
+      timeoutMs + 500,
+      createDeepReadTimeout(productUrl)
+    );
+  }
+
+  if (workerResult.status === "success" && deepReadHasInteractiveEvidence(workerResult)) {
     return workerResult;
   }
 
-  return readDeepProductPage(productUrl, { timeoutMs });
+  if (localResult) {
+    return deepReadEvidenceScore(localResult) > deepReadEvidenceScore(workerResult)
+      ? localResult
+      : workerResult;
+  }
+
+  const remainingMs = timeoutMs - (Date.now() - startedAt);
+  if (remainingMs < 5000) {
+    return workerResult;
+  }
+
+  const fallbackResult = await withTimeout(
+    readLocal(productUrl, { timeoutMs: remainingMs }),
+    remainingMs + 500,
+    createDeepReadTimeout(productUrl)
+  );
+  return deepReadEvidenceScore(fallbackResult) > deepReadEvidenceScore(workerResult)
+    ? fallbackResult
+    : workerResult;
 }
 
 function createDeepReadTimeout(productUrl) {
@@ -1920,9 +2023,12 @@ async function analyzeProductUrl(productUrl) {
 
   const retailer = parsedUrl.hostname.replace(/^www\./, "");
   const fallbackNote = "Could not reliably read the product page. This report is based on limited available data.";
-  const configuredDeepReaderTimeoutMs = Number(
-    process.env.DEEP_READER_WORKER_TIMEOUT_MS || MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS
+  const configuredDeepReaderTimeoutValue = Number(
+    process.env.DEEP_READER_WORKER_TIMEOUT_MS || DEFAULT_ANALYSIS_DEEP_READER_TIMEOUT_MS
   );
+  const configuredDeepReaderTimeoutMs = Number.isFinite(configuredDeepReaderTimeoutValue) && configuredDeepReaderTimeoutValue > 0
+    ? configuredDeepReaderTimeoutValue
+    : DEFAULT_ANALYSIS_DEEP_READER_TIMEOUT_MS;
   const deepReaderTimeoutMs = Math.min(
     Math.max(configuredDeepReaderTimeoutMs, 5000),
     MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS
@@ -2095,4 +2201,5 @@ async function analyzeProductUrl(productUrl) {
 module.exports = {
   analyzeProductUrl,
   buildAiPageText,
+  readProductPageDeepEvidence,
 };

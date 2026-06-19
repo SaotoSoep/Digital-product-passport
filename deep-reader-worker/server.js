@@ -98,6 +98,7 @@ function failureReasonFor(value) {
   if (/bot|captcha|verification/.test(normalized)) return "blocked_by_bot_protection";
   if (/access|denied|private|forbidden/.test(normalized)) return "access_denied";
   if (/timeout/.test(normalized)) return "timeout";
+  if (/no relevant interactive sections/.test(normalized)) return "no_relevant_interactive_sections_found";
   if (/unsupported|rendering|playwright|chromium/.test(normalized)) return "unsupported_rendering_pattern";
   return "unknown_error";
 }

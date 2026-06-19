@@ -5,7 +5,7 @@
   "description": "Minimal MVP for generating a product passport report from a fashion product URL.",
   "scripts": {
     "dev": "node server.js",
-    "test": "NODE_ENV=test node --test",
+    "test": "NODE_ENV=test DEEP_READER_WORKER_URL= DEEP_READER_WORKER_TIMEOUT_MS= node --test",
     "start": "node server.js"
   },
   "dependencies": {

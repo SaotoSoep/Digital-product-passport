@@ -1,7 +1,12 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
-const { analyzeProductUrl } = require("../src/analyzer");
+const {
+  analyzeProductUrl,
+  readProductPageDeepEvidence,
+} = require("../src/analyzer");
 const {
   callDeepReaderWorker,
   normalizeWorkerDeepReadResponse,
@@ -86,6 +91,87 @@ test("normalizes unsupported rendering worker responses", async () => {
   assert.equal(result.mode, "Deep read unsupported");
   assert.equal(workerFailureMode("access_denied"), "Deep read blocked");
   assert.equal(workerFailureMode("timeout"), "Deep read timeout");
+});
+
+test("normalizes a partial worker response without interactive sections", () => {
+  const normalized = normalizeWorkerDeepReadResponse({
+    status: "partial",
+    failureReason: "no_relevant_interactive_sections_found",
+    sourceUrl: "https://shop.example/product",
+    deepReadSummary: {},
+    evidence: [],
+  }, "https://shop.example/product");
+
+  assert.equal(normalized.failureReason, "no relevant interactive sections found");
+  assert.equal(normalized.mode, "Production deep read partial");
+});
+
+test("falls back to a stronger local deep read when the worker finds no interactive evidence", async () => {
+  let workerTimeoutMs = 0;
+  let localTimeoutMs = 0;
+  const result = await readProductPageDeepEvidence(
+    "https://shop.example/product",
+    30000,
+    {
+      worker: async (_url, options) => {
+        workerTimeoutMs = options.timeoutMs;
+        return {
+          status: "partial",
+          counts: {},
+          textEvidence: [{ text: "Initial product page" }],
+          structuredData: [],
+          networkResponses: [],
+        };
+      },
+      local: async (_url, options) => {
+        localTimeoutMs = options.timeoutMs;
+        return {
+          status: "success",
+          counts: { tabsClicked: 2, accordionsOpened: 0, readMoreExpanded: 1 },
+          textEvidence: [{ text: "Material and care details" }],
+          structuredData: [],
+          networkResponses: [],
+        };
+      },
+    }
+  );
+
+  assert.equal(workerTimeoutMs, 25000);
+  assert(localTimeoutMs >= 25000);
+  assert.equal(result.status, "success");
+  assert.equal(result.counts.tabsClicked, 2);
+});
+
+test("uses a strong local deep read without waiting for the worker in local development", async () => {
+  let workerCalled = false;
+  const result = await readProductPageDeepEvidence(
+    "https://shop.example/product",
+    30000,
+    {
+      preferLocal: true,
+      worker: async () => {
+        workerCalled = true;
+        return null;
+      },
+      local: async () => ({
+        status: "success",
+        counts: { tabsClicked: 1 },
+        textEvidence: [{ text: "Care details" }],
+        structuredData: [],
+        networkResponses: [],
+      }),
+    }
+  );
+
+  assert.equal(result.status, "success");
+  assert.equal(workerCalled, false);
+});
+
+test("keeps local and worker deep-reader implementations synchronized", () => {
+  const localReader = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "product-page", "deep-reader.js"), "utf8");
+  const workerReader = fs.readFileSync(path.join(__dirname, "..", "deep-reader-worker", "lib", "deep-reader.js"), "utf8");
+
+  assert.equal(workerReader, localReader);
 });
 
 test("times out worker calls and returns timeout fallback", async () => {
