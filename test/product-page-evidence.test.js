@@ -137,6 +137,9 @@ test("adds normalized product-page evidence to the report using an OSKA-style fi
     assert(analysis.report.passportReadiness.missingFields.some((item) => item.key === "proofDocuments"));
     assert.match(evidence.fields.materialComposition.values[0], /katoen/);
     assert.match(evidence.fields.careText.values[0], /Wasvoorschrift/);
+    assert(analysis.report.evidenceLedger.records.length > 0);
+    assert(analysis.report.claimCitations.some((claim) => claim.category === "material"));
+    assert(!analysis.report.unknowns.some((item) => /materials not publicly listed/i.test(item)));
   } finally {
     global.fetch = originalFetch;
   }

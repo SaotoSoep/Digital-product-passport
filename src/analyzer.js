@@ -11,7 +11,11 @@ const {
   readDeepProductPage,
 } = require("./lib/product-page/deep-reader");
 const { callDeepReaderWorker } = require("./lib/product-page/deep-reader-worker-client");
-const { buildProductPageEvidence } = require("./lib/product-passport/evidence");
+const {
+  buildCanonicalClaims,
+  buildCanonicalEvidenceLedger,
+  buildProductPageEvidence,
+} = require("./lib/product-passport/evidence");
 const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
@@ -1456,12 +1460,79 @@ function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
   return productPageEvidence;
 }
 
+function alignReportWithCanonicalEvidence(report, evidence) {
+  const fields = evidence?.fields || {};
+  const foundText = (key) => fields[key]?.status === "found"
+    ? fields[key].values.join("; ")
+    : "";
+  const material = foundText("materialComposition");
+  const care = foundText("careText");
+  const origin = foundText("productionOrigin");
+  const supplier = foundText("supplierDetails");
+  const sustainability = fields.sustainabilityClaims?.status === "found"
+    ? fields.sustainabilityClaims.values
+    : [];
+  const hasBrandEvidence = ["sustainabilityClaims", "certifications", "durabilityClaims"]
+    .some((key) => fields[key]?.status === "found");
+  const unknowns = (Array.isArray(report.unknowns) ? report.unknowns : []).filter((item) => {
+    const text = String(item).toLowerCase();
+    if (material && /material/.test(text)) return false;
+    if (care && /care|washing/.test(text)) return false;
+    if ((origin || supplier) && /origin|manufactur|supplier|factory/.test(text)) return false;
+    if (sustainability.length > 0 && /sustainability claim/.test(text)) return false;
+    return true;
+  });
+
+  return {
+    ...report,
+    materialExplained: material ? {
+      ...(report.materialExplained || {}),
+      rawMaterial: material,
+      simpleExplanation: "Direct material wording captured in the canonical evidence ledger.",
+      confidence: "High",
+    } : report.materialExplained,
+    washingCareAdvice: care ? {
+      ...(report.washingCareAdvice || {}),
+      summary: care,
+      confidence: "High",
+    } : report.washingCareAdvice,
+    productionOriginTransparency: origin ? {
+      ...(report.productionOriginTransparency || {}),
+      status: "Found some origin or manufacturing detail",
+      detail: origin,
+      confidence: "High",
+    } : report.productionOriginTransparency,
+    supplierTransparency: supplier ? {
+      ...(report.supplierTransparency || {}),
+      status: "Found supplier or factory detail",
+      detail: supplier,
+      confidence: "High",
+    } : report.supplierTransparency,
+    sustainabilityClaimsFound: sustainability.length > 0 && !(report.sustainabilityClaimsFound || []).length
+      ? sustainability.map((claim) => ({
+          claim,
+          type: "brand_statement",
+          confidence: "Medium",
+          whyItMatters: "This is cited brand wording, not independent verification.",
+        }))
+      : report.sustainabilityClaimsFound,
+    claimStrengthScore: hasBrandEvidence ? {
+      ...(report.claimStrengthScore || {}),
+      rationale: "Brand and certification wording was found on the product page; no separate qualifying source independently verified it.",
+    } : report.claimStrengthScore,
+    unknowns,
+  };
+}
+
 function withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence = null) {
   const productPageEvidence = buildProductPageEvidence(
     productPageSnapshot,
     collectReportFallbacks(report)
   );
   const checkedProductPageEvidence = applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence);
+  buildCanonicalEvidenceLedger(checkedProductPageEvidence);
+  const alignedReport = alignReportWithCanonicalEvidence(report, checkedProductPageEvidence);
+  const claimCitations = buildCanonicalClaims(alignedReport, checkedProductPageEvidence);
   const deepReadNote = deepReadShouldMakeMissingUnavailable(deepPageReadEvidence)
     ? deepReadBlockedNote()
     : "";
@@ -1474,13 +1545,15 @@ function withProductPageEvidence(report, productPageSnapshot, deepPageReadEviden
     : "Basic fallback used";
 
   return {
-    ...report,
+    ...alignedReport,
     deepPageReadEvidence: deepPageReadEvidence
       ? { ...deepPageReadEvidence, mode: deepPageReadEvidence.mode || deepReadMode, note: deepPageReadEvidence.note || deepReadNote }
       : deepPageReadEvidence,
     deepReadMode,
     deepReadNote,
     productPageEvidence: checkedProductPageEvidence,
+    evidenceLedger: checkedProductPageEvidence.evidenceLedger,
+    claimCitations,
     passportReadiness: buildPassportReadiness(checkedProductPageEvidence, productPageSnapshot),
   };
 }
