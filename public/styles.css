@@ -808,6 +808,37 @@ button {
   font-size: 0.82rem;
 }
 
+.citation-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.citation-item {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border-left: 3px solid var(--blue);
+  background: var(--blue-soft);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.citation-item a,
+.citation-item span {
+  font-weight: 800;
+}
+
+.citation-item q {
+  color: var(--muted);
+}
+
+.interpretation-note {
+  color: var(--amber) !important;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .fallback-strip {
   display: grid;
   gap: 7px;

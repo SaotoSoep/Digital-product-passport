@@ -155,6 +155,11 @@ function statusBadge(status) {
 
 function evidenceSourceLabel(source) {
   const labels = {
+    brand_statement: "Brand statement",
+    public_page_evidence: "Public page evidence",
+    external_evidence: "External evidence",
+    missing_information: "Missing information",
+    interpretation: "Interpretation",
     product_page_deep_read: "Product page deep read",
     product_page_basic_extraction: "Product page basic extraction",
     brand_page: "Brand page",
@@ -167,6 +172,10 @@ function evidenceSourceLabel(source) {
 
 function displayText(value, emptyText = "") {
   return known(value) || known(emptyText);
+}
+
+function displayMachineStatus(value, fallback = "") {
+  return String(value || fallback).trim().replaceAll("_", " ");
 }
 
 function cleanReadableText(value) {
@@ -339,11 +348,28 @@ function renderTextValue(value, emptyText) {
   return `<p${cleaned ? "" : " class=\"muted\""}>${escapeHtml(rendered)}</p>`;
 }
 
+function renderCitations(records) {
+  if (!Array.isArray(records) || records.length === 0) return "";
+
+  return `<div class="citation-list">${records.map((record) => {
+    const label = `${record.id} · ${evidenceSourceLabel(record.sourceType)} · ${record.verificationStatus} · ${record.extractionConfidence} confidence`;
+    const excerpt = truncateReadableText(record.excerpt, 180);
+    return `<div class="citation-item">
+      ${isValidProductUrl(record.sourceUrl)
+        ? `<a href="${escapeHtml(record.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+        : `<span>${escapeHtml(label)}</span>`}
+      <q>${escapeHtml(excerpt)}</q>
+    </div>`;
+  }).join("")}</div>`;
+}
+
 function renderSummaryCard(label, value, emptyText, options = {}) {
   return `
     <article class="summary-block ${options.wide ? "wide" : ""}">
       <span class="mini-label">${escapeHtml(label)}</span>
       ${renderTextValue(value, emptyText)}
+      ${options.interpretation ? `<p class="interpretation-note">Interpretation — not a cited product fact.</p>` : ""}
+      ${renderCitations(options.citations)}
     </article>
   `;
 }
@@ -409,6 +435,7 @@ function renderStructuredSummaryCard(label, values, emptyText, options = {}) {
             </div>
           `).join("")}</dl>`
         : `<p class="muted">${escapeHtml(cleanReadableText(emptyText))}</p>`}
+      ${renderCitations(options.citations)}
     </article>
   `;
 }
@@ -444,6 +471,11 @@ function extractModel(response, submittedUrl) {
   const snapshot = storedPassport?.snapshot || metadata.productPageSnapshot || null;
   const evidence = storedPassport?.report?.productPageEvidence || report.productPageEvidence || null;
   const fields = evidence?.fields || {};
+  const evidenceLedger = report.evidenceLedger || evidence?.evidenceLedger || { records: [] };
+  const evidenceRecordIndex = new Map((evidenceLedger.records || []).map((record) => [record.id, record]));
+  for (const field of Object.values(fields)) {
+    field.citationRecords = (field.evidenceIds || []).map((id) => evidenceRecordIndex.get(id)).filter(Boolean);
+  }
   const productName = firstFieldValue(
     fields.productName,
     known(storedPassport?.productName) || known(snapshot?.likelyProductName) || "Product name not found"
@@ -457,7 +489,7 @@ function extractModel(response, submittedUrl) {
     fields.materialComposition,
     ""
   );
-  const material = evidenceMaterial || usefulReportText(report.materialExplained?.rawMaterial) || "Material not found";
+  const material = evidenceMaterial || "Material not found";
   const materialExplanation = cleanReadableText(report.materialExplained?.simpleExplanation);
   const materialItems = Array.isArray(report.materialExplained?.materials)
     ? report.materialExplained.materials
@@ -488,13 +520,13 @@ function extractModel(response, submittedUrl) {
     fields.careText,
     ""
   );
-  const care = evidenceCare || usefulReportText(report.washingCareAdvice?.summary) || "Care information not found";
+  const care = evidenceCare || "Care information not found";
   const evidenceOrigin = fieldDisplayValue(
     fields.productionOrigin,
     ""
   );
   const originValues = fieldValues(fields.productionOrigin);
-  const origin = evidenceOrigin || usefulReportText(report.productionOriginTransparency?.detail) || "Origin/manufacturing information not found";
+  const origin = evidenceOrigin || "Origin/manufacturing information not found";
   const evidenceSupplierDetails = fieldDisplayValue(
     fields.supplierDetails,
     ""
@@ -504,7 +536,7 @@ function extractModel(response, submittedUrl) {
     ...supplierDetailValues,
     ...originValues,
   ];
-  const supplierDetails = evidenceSupplierDetails || usefulReportText(report.supplierTransparency?.detail) || "Supplier/factory information not found";
+  const supplierDetails = evidenceSupplierDetails || "Supplier/factory information not found";
   const certifications = fieldValues(fields.certifications);
   const durabilityClaims = fieldValues(fields.durabilityClaims);
   const claimValues = fieldValues(fields.sustainabilityClaims);
@@ -549,6 +581,8 @@ function extractModel(response, submittedUrl) {
     metadata,
     snapshot,
     evidence,
+    evidenceLedger,
+    evidenceRecordIndex,
     fields,
     productName,
     brand,
@@ -575,6 +609,7 @@ function extractModel(response, submittedUrl) {
     certifications,
     durabilityClaims,
     claims,
+    claimCitations: Array.isArray(report.claimCitations) ? report.claimCitations : [],
     claimValues,
     fallbackClaims,
     unknowns,
@@ -751,6 +786,7 @@ function renderFieldBlock(title, field, emptyText) {
             : ""
         }
       </div>
+      ${renderCitations(field?.citationRecords)}
       ${
         sourceLabel || sourceUrl || extractedAt
           ? `<p class="source-line">${escapeHtml([displayText(sourceLabel), sourceUrl, extractedAt].filter(Boolean).join(" · "))}</p>`
@@ -854,17 +890,7 @@ function renderPassportReadiness(model) {
   const readiness = model.passportReadiness || {};
   const counts = readiness.counts || {};
   const readyFields = Array.isArray(readiness.readyFields)
-    ? readiness.readyFields.map((item) => {
-        if (item && item.key === "productDescription" && model.productSummary) {
-          return {
-            ...item,
-            value: model.productSummary,
-            detail: "",
-          };
-        }
-
-        return item;
-      })
+    ? readiness.readyFields
     : [];
   const missingFields = Array.isArray(readiness.missingFields) ? readiness.missingFields : [];
   const warnings = Array.isArray(readiness.warnings) ? readiness.warnings : [];
@@ -906,12 +932,13 @@ function renderPassportReadiness(model) {
   `;
 }
 
-function renderClaimItem(claim) {
-  const claimText = known(claim.brandClaim) || known(claim.claim) || "Claim text not found";
-  const evidenceLevel = known(claim.evidenceLevel) || known(claim.evidence) || known(claim.publicEvidence) || "Visible page wording";
-  const confidence = known(claim.confidence) || "Medium";
-  const type = known(claim.type);
-  const whyItMatters = known(claim.whyItMatters);
+function renderClaimItem(claim, evidenceRecordIndex = new Map()) {
+  const claimText = known(claim.originalWording) || known(claim.brandClaim) || known(claim.claim) || "Claim text not found";
+  const confidence = known(claim.confidenceDimension) || known(claim.confidence) || "medium";
+  const type = known(claim.sourceType) || known(claim.type);
+  const verificationStatus = String(claim.verificationStatus || "interpretation").trim();
+  const whyItMatters = known(claim.note) || known(claim.whyItMatters);
+  const records = (claim.evidenceIds || []).map((id) => evidenceRecordIndex.get(id)).filter(Boolean);
 
   return `
     <article class="claim-row">
@@ -919,8 +946,10 @@ function renderClaimItem(claim) {
         <h3>${escapeHtml(cleanReadableText(claimText))}</h3>
         <span class="confidence-badge">${escapeHtml(displayText(confidence))}</span>
       </div>
-      ${type ? `<p><strong>Type:</strong> ${escapeHtml(cleanReadableText(type))}</p>` : ""}
-      <p>${escapeHtml(cleanReadableText(evidenceLevel))}</p>
+      ${claim.category ? `<p><strong>Category:</strong> ${escapeHtml(cleanReadableText(claim.category))}</p>` : ""}
+      ${type ? `<p><strong>Source type:</strong> ${escapeHtml(evidenceSourceLabel(type))}</p>` : ""}
+      <p><strong>Verification:</strong> ${escapeHtml(displayMachineStatus(verificationStatus))}</p>
+      ${renderCitations(records)}
       ${whyItMatters ? `<p class="muted">${escapeHtml(cleanReadableText(whyItMatters))}</p>` : ""}
     </article>
   `;
@@ -1060,11 +1089,12 @@ function renderOverviewTab(model) {
       ${renderDeepPageReadEvidence(model)}
       ${renderEvidenceChecklist(model)}
       <div class="content-grid">
-      ${renderSummaryCard(descriptionLabel, primaryDescription, "Not found.", { wide: true })}
-      ${renderSummaryCard("Material insight", model.material, "Not found.")}
-      ${renderSummaryCard("Care guidance", model.care, "Not found.")}
+      ${renderSummaryCard(descriptionLabel, primaryDescription, "Not found.", { wide: true, interpretation: Boolean(model.productSummary) })}
+      ${renderSummaryCard("Material insight", model.material, "Not found.", { citations: model.fields.materialComposition?.citationRecords })}
+      ${renderSummaryCard("Care guidance", model.care, "Not found.", { citations: model.fields.careText?.citationRecords })}
       ${renderStructuredSummaryCard("Production Origin", model.productionOriginValues, "Not found.", {
         wide: true,
+        citations: [...(model.fields.productionOrigin?.citationRecords || []), ...(model.fields.supplierDetails?.citationRecords || [])],
         includeLabels: ["Country", "Supplier", "Factory", "Address", "Employees"],
         labelOrder: ["Country", "Supplier", "Factory", "Address", "Employees"],
         uniqueLabels: true,
@@ -1075,8 +1105,8 @@ function renderOverviewTab(model) {
         labelOrder: ["Color", "Color reference"],
         uniqueLabels: true,
       })}
-      ${renderSummaryCard("Certifications", model.certifications.length ? model.certifications.join(" ") : "", "Not found.")}
-      ${renderSummaryCard("Conclusion", model.conclusion, "Not found.", { wide: true })}
+      ${renderSummaryCard("Certifications", model.certifications.length ? model.certifications.join(" ") : "", "Not found.", { citations: model.fields.certifications?.citationRecords })}
+      ${renderSummaryCard("Conclusion", model.conclusion, "Not found.", { wide: true, interpretation: true })}
       ${renderSummaryCard("Brand context", model.brandInsight.summary, "Not found.", { wide: true })}
       </div>
     </section>
@@ -1084,8 +1114,9 @@ function renderOverviewTab(model) {
 }
 
 function renderClaimsTab(model) {
-  const claimRows = model.claims.length > 0
-    ? model.claims.map(renderClaimItem).join("")
+  const displayedClaims = model.claimCitations.length > 0 ? model.claimCitations : model.claims;
+  const claimRows = displayedClaims.length > 0
+    ? displayedClaims.map((claim) => renderClaimItem(claim, model.evidenceRecordIndex)).join("")
     : `<article class="empty-row"><h3>No claim rows</h3><p>The analyzer did not return structured sustainability claims for this URL.</p></article>`;
 
   return `
