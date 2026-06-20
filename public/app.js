@@ -174,6 +174,10 @@ function displayText(value, emptyText = "") {
   return known(value) || known(emptyText);
 }
 
+function displayMachineStatus(value, fallback = "") {
+  return String(value || fallback).trim().replaceAll("_", " ");
+}
+
 function cleanReadableText(value) {
   const text = displayText(value)
     .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
@@ -944,7 +948,7 @@ function renderClaimItem(claim, evidenceRecordIndex = new Map()) {
       </div>
       ${claim.category ? `<p><strong>Category:</strong> ${escapeHtml(cleanReadableText(claim.category))}</p>` : ""}
       ${type ? `<p><strong>Source type:</strong> ${escapeHtml(evidenceSourceLabel(type))}</p>` : ""}
-      <p><strong>Verification:</strong> ${escapeHtml(cleanReadableText(verificationStatus))}</p>
+      <p><strong>Verification:</strong> ${escapeHtml(displayMachineStatus(verificationStatus))}</p>
       ${renderCitations(records)}
       ${whyItMatters ? `<p class="muted">${escapeHtml(cleanReadableText(whyItMatters))}</p>` : ""}
     </article>

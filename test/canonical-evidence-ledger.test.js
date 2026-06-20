@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
@@ -115,4 +117,12 @@ test("downgrades unsupported AI facts to interpretation without a citation", () 
   assert.equal(unsupported.verificationStatus, "interpretation");
   assert.deepEqual(unsupported.evidenceIds, []);
   assert.match(unsupported.note, /not present in the evidence ledger/i);
+});
+
+test("renders machine verification statuses without treating not_found as empty", () => {
+  const appJs = fs.readFileSync(path.join(__dirname, "..", "public", "app.js"), "utf8");
+
+  assert.match(appJs, /function displayMachineStatus/);
+  assert.match(appJs, /Verification:<\/strong>.*displayMachineStatus\(verificationStatus\)/);
+  assert.doesNotMatch(appJs, /Verification:<\/strong>.*cleanReadableText\(verificationStatus\)/);
 });
