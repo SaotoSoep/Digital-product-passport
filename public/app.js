@@ -270,12 +270,20 @@ function usefulReportText(value) {
 }
 
 function scoreValue(score) {
-  const numeric = Number(score && score.score);
-  if (!Number.isFinite(numeric)) {
-    return 0;
+  if (!score || score.status === "not_available") {
+    return { ...(score || {}), status: "not_available", score: null };
   }
 
-  return Math.max(0, Math.min(100, Math.round(numeric)));
+  const numeric = Number(score && score.score);
+  if (!Number.isFinite(numeric)) {
+    return { ...score, status: "not_available", score: null };
+  }
+
+  return {
+    ...score,
+    status: "scored",
+    score: Math.max(0, Math.min(100, Math.round(numeric))),
+  };
 }
 
 function fallbackPassportReadiness(fields, evidenceFields) {
@@ -726,7 +734,15 @@ function buildVerdict(model) {
     };
   }
 
-  if (model.claimScore < 45) {
+  if (model.claimScore.status !== "scored") {
+    return {
+      label: "Claim evidence unavailable",
+      tone: "neutral",
+      summary: model.claimScore.rationale || "There is not enough readable product-level evidence to score claim strength.",
+    };
+  }
+
+  if (model.claimScore.score < 45) {
     return {
       label: "Claim needs proof",
       tone: "warning",
@@ -741,17 +757,39 @@ function buildVerdict(model) {
   };
 }
 
-function renderScore(label, score, rationale) {
+function renderScoreFactors(title, factors, className) {
+  if (!Array.isArray(factors) || factors.length === 0) {
+    return "";
+  }
+
   return `
-    <div class="score-card">
+    <div class="score-factors ${className}">
+      <span>${escapeHtml(title)}</span>
+      <ul>${factors.map((factor) => `
+        <li>
+          <strong>${escapeHtml(factor.label)}</strong>
+          ${factor.reason ? `<span>${escapeHtml(cleanReadableText(factor.reason))}</span>` : ""}
+        </li>
+      `).join("")}</ul>
+    </div>
+  `;
+}
+
+function renderScore(label, score) {
+  const available = score && score.status === "scored";
+  const numericScore = available ? score.score : 0;
+  const displayScore = available ? `${numericScore}/100` : "Not available";
+
+  return `
+    <div class="score-card ${available ? "" : "score-unavailable"}">
       <div class="score-topline">
         <span>${escapeHtml(label)}</span>
-        <strong>${score}/100</strong>
+        <strong>${escapeHtml(displayScore)}</strong>
       </div>
-      <div class="score-track" aria-hidden="true">
-        <span style="width: ${score}%"></span>
-      </div>
-      ${rationale ? `<p>${escapeHtml(cleanReadableText(rationale))}</p>` : ""}
+      ${available ? `<div class="score-track" aria-hidden="true"><span style="width: ${numericScore}%"></span></div>` : ""}
+      ${score?.rationale ? `<p>${escapeHtml(cleanReadableText(score.rationale))}</p>` : ""}
+      ${renderScoreFactors("Top positive", score?.topPositiveFactors, "positive")}
+      ${renderScoreFactors("Most important missing", score?.missingFactors, "missing")}
     </div>
   `;
 }
@@ -1009,8 +1047,6 @@ function renderReportHeader(model) {
 
 function renderReportOverview(model) {
   const verdict = buildVerdict(model);
-  const transparencyRationale = known(model.report.transparencyScore?.rationale);
-  const claimRationale = known(model.report.claimStrengthScore?.rationale);
   const coverageSummary = model.deepReadNote || (model.extractionStatus === "failed"
     ? "Product-page extraction failed. Fallback values remain separated from product-page evidence."
     : `Product-page extraction found ${model.foundCount} of ${model.checkedCount} relevant fields. Fields that were not found are listed separately in the Gaps tab. Fallback values remain separated from product-page evidence.`);
@@ -1022,8 +1058,8 @@ function renderReportOverview(model) {
       <p>${escapeHtml(cleanReadableText(verdict.summary))}</p>
     </div>
 
-    ${renderScore("Transparency", model.transparencyScore, transparencyRationale)}
-    ${renderScore("Claim strength", model.claimScore, claimRationale)}
+    ${renderScore("Transparency", model.transparencyScore)}
+    ${renderScore("Claim strength", model.claimScore)}
 
     <div class="score-card">
       <div class="score-topline">

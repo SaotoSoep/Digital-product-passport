@@ -29,10 +29,36 @@ The current Product Passport Report output is generated from visible page eviden
 - Sustainability claims: any environmental or ethical claims shown on the product page.
 - Evidence level: how strongly each claim is supported by public page content.
 - Missing information: details that are absent, unclear, or not publicly verifiable.
-- Confidence scores: simple scores that show how confident the report is in the visible information.
+- Deterministic scores: reproducible disclosure coverage and claim-evidence strength, calculated from canonical product-page evidence.
 - Conclusion: a short consumer-friendly wrap-up of what is known and what is still uncertain.
 
 Missing or unverifiable information should be shown explicitly and not invented.
+
+## Deterministic score rubric
+
+Both scores are calculated in `src/lib/product-passport/scorer.js`; model output and brand-context pages never set or change a score. A result has `status: "scored"` with an integer from 0–100, or `status: "not_available"` with `score: null`. Failed or unreadable extraction is always Not available, never a proxy score. Claim strength is also Not available when no product-level claim was found.
+
+Transparency measures disclosure only. Its weighted inputs total 100 points:
+
+| Input | Weight |
+| --- | ---: |
+| Product identity (name, brand, identifier) | 10 |
+| Product description | 5 |
+| Material composition | 20 |
+| Production origin | 15 |
+| Supplier or factory | 15 |
+| Care instructions | 10 |
+| Claim wording disclosed | 10 |
+| Certification references | 10 |
+| Durability, repair, or warranty | 5 |
+
+Canonical contradictions deduct 10 points each, capped at a 15-point deduction. The score itself is always clamped to 0–100. URL, page title, fallback interpretation, brand prose, impact/LCA data, and regulatory compliance do not add points.
+
+Claim strength measures evidence for a disclosed claim, not whether the product is environmentally preferable. Its inputs are claim specificity (20), matching product-specific composition or performance support (25), independent product-linked certification support (35), origin/supplier traceability (15), and durability/test support (5). Contradictions deduct 15 points each, capped at 25 points.
+
+A claim without both independent and product-specific support is capped: brand wording alone at 35, and a claim with only one of those support types at 60. A certification receives the full 35 points only when a product identifier links it to the assessed item. Every scored result returns factor-level reasons, deductions, the applied cap, its top two positive factors, and its two highest-weight missing factors for UI explanation.
+
+These labels describe disclosure and evidence strength only. They must not characterize a product itself as sustainable or unsustainable.
 
 ## MVP principles
 
@@ -42,7 +68,7 @@ Missing or unverifiable information should be shown explicitly and not invented.
 - No browser extension logic
 - No broad search or certification lookup
 - No retailer-specific scraping layer yet
-- Cautious claim handling: the app does not label a product as sustainable unless evidence is actually found
+- Cautious claim handling: the app describes disclosure and evidence strength, never the product itself as sustainable or unsustainable
 
 ## Tech setup
 

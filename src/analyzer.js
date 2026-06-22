@@ -17,6 +17,7 @@ const {
   buildProductPageEvidence,
 } = require("./lib/product-passport/evidence");
 const { buildPassportReadiness } = require("./lib/product-passport/readiness");
+const { scoreProductPassport } = require("./lib/product-passport/scorer");
 
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -40,7 +41,7 @@ Rules:
 - Treat product categories and navigation breadcrumbs as page context only. Never include them in colour, variant, identifier, origin, or other product-passport fields.
 - For colour or variant information, keep only an explicitly stated colour/variant name and an explicit colour reference such as a hex code.
 - For sustainability_claims: if a claim has no supporting certificate or third-party verification on the page, set type to "unverified" and confidence to "low".
-- The transparency_score and claim_strength_score are integers from 0 to 100. Base them on how much verifiable information is present, not on how sustainable the product sounds.
+- Do not calculate transparency or claim-strength scores. Application code calculates them deterministically from canonical evidence.
 
 Return exactly this JSON structure, nothing else:
 {
@@ -72,14 +73,6 @@ Return exactly this JSON structure, nothing else:
     "confidence": "high | medium | low"
   },
   "care_instructions": ["string"],
-  "transparency_score": {
-    "score": 0,
-    "reasoning": "string - short explanation of why this score was given"
-  },
-  "claim_strength_score": {
-    "score": 0,
-    "reasoning": "string - short explanation of why this score was given"
-  },
   "missing_information": [
     "string - one item per missing or unverifiable piece of information"
   ],
@@ -364,16 +357,6 @@ function getOpenAiClient() {
   return openAiClient;
 }
 
-function clampScore(value) {
-  const number = Number(value);
-
-  if (!Number.isFinite(number)) {
-    return 0;
-  }
-
-  return Math.max(0, Math.min(100, Math.round(number)));
-}
-
 function titleCaseConfidence(value) {
   const normalized = String(value || "").trim().toLowerCase();
 
@@ -394,6 +377,17 @@ function asCleanArray(value) {
     : [];
 }
 
+function sanitizeConclusion(value) {
+  const conclusion = cleanText(value);
+  const productVerdict = /\b(?:is|appears|seems|represents)\s+(?:an?\s+)?(?:sustainable|unsustainable|eco[- ]?friendly|green)\b/i;
+
+  if (productVerdict.test(conclusion)) {
+    return "The report describes disclosed materials, claims, and supporting evidence without judging the product itself. Review the listed missing factors before relying on the claims.";
+  }
+
+  return conclusion;
+}
+
 function parseAiJson(raw) {
   const cleaned = String(raw || "")
     .replace(/^```json\s*/i, "")
@@ -407,12 +401,6 @@ function parseAiJson(raw) {
 function normalizeAiReport(value) {
   const report = value && typeof value === "object" ? value : {};
   const origin = report.origin && typeof report.origin === "object" ? report.origin : {};
-  const transparencyScore = report.transparency_score && typeof report.transparency_score === "object"
-    ? report.transparency_score
-    : {};
-  const claimStrengthScore = report.claim_strength_score && typeof report.claim_strength_score === "object"
-    ? report.claim_strength_score
-    : {};
   const materials = Array.isArray(report.materials)
     ? report.materials
         .filter((material) => material && typeof material === "object")
@@ -452,14 +440,6 @@ function normalizeAiReport(value) {
       confidence: titleCaseConfidence(origin.confidence),
     },
     care_instructions: asCleanArray(report.care_instructions),
-    transparency_score: {
-      score: clampScore(transparencyScore.score),
-      reasoning: cleanText(transparencyScore.reasoning),
-    },
-    claim_strength_score: {
-      score: clampScore(claimStrengthScore.score),
-      reasoning: cleanText(claimStrengthScore.reasoning),
-    },
     missing_information: materials.length === 0 && !missingInformation.some((item) => item.toLowerCase() === "materials not publicly listed")
       ? ["materials not publicly listed", ...missingInformation]
       : missingInformation,
@@ -1533,6 +1513,7 @@ function withProductPageEvidence(report, productPageSnapshot, deepPageReadEviden
   buildCanonicalEvidenceLedger(checkedProductPageEvidence);
   const alignedReport = alignReportWithCanonicalEvidence(report, checkedProductPageEvidence);
   const claimCitations = buildCanonicalClaims(alignedReport, checkedProductPageEvidence);
+  const deterministicScores = scoreProductPassport(checkedProductPageEvidence);
   const deepReadNote = deepReadShouldMakeMissingUnavailable(deepPageReadEvidence)
     ? deepReadBlockedNote()
     : "";
@@ -1555,6 +1536,7 @@ function withProductPageEvidence(report, productPageSnapshot, deepPageReadEviden
     evidenceLedger: checkedProductPageEvidence.evidenceLedger,
     claimCitations,
     passportReadiness: buildPassportReadiness(checkedProductPageEvidence, productPageSnapshot),
+    ...deterministicScores,
   };
 }
 
@@ -1767,17 +1749,7 @@ function mapAiReportToExistingShape(aiReport, { productUrl, retailer, extracted,
       price: aiReport.price,
       schema: "product-transparency-report-v1",
     },
-    transparencyScore: {
-      score: aiReport.transparency_score.score,
-      outOf: 100,
-      rationale: aiReport.transparency_score.reasoning || "This score reflects what could be identified in the fetched product-page text.",
-    },
-    claimStrengthScore: {
-      score: aiReport.claim_strength_score.score,
-      outOf: 100,
-      rationale: aiReport.claim_strength_score.reasoning || "This score reflects the strength of product-page claim evidence.",
-    },
-    conclusion: aiReport.conclusion || "The fetched page could be analyzed, but the resulting transparency assessment was limited by the public page text.",
+    conclusion: sanitizeConclusion(aiReport.conclusion) || "The fetched page could be analyzed, but the resulting transparency assessment was limited by the public page text.",
     sources,
     unknowns: aiReport.missing_information.length > 0
       ? aiReport.missing_information
@@ -1829,16 +1801,6 @@ function buildAiFailureReport({
       provider: "openai",
       model: OPENAI_MODEL,
       status: "failed",
-    },
-    transparencyScore: {
-      score: 0,
-      outOf: 100,
-      rationale: "No transparency score could be produced because the analysis failed.",
-    },
-    claimStrengthScore: {
-      score: 0,
-      outOf: 100,
-      rationale: "No claim strength score could be produced because the analysis failed.",
     },
     conclusion: "No product-level transparency assessment could be made from the fetched page content.",
     sources: buildSources(productUrl, extracted),
@@ -1897,16 +1859,6 @@ function buildPartialReport(productUrl, retailer, note, productPageSnapshot, bra
       sources: [],
     },
     accessDiagnostics,
-    transparencyScore: {
-      score: 10,
-      outOf: 100,
-      rationale: "Low score because the product page could not be reliably extracted.",
-    },
-    claimStrengthScore: {
-      score: 10,
-      outOf: 100,
-      rationale: "No claim strength can be established when the page content is not reliably available.",
-    },
     conclusion: "No reliable product-level transparency assessment could be made from the fetched page content.",
     sources: [
       {
@@ -2275,4 +2227,5 @@ module.exports = {
   analyzeProductUrl,
   buildAiPageText,
   readProductPageDeepEvidence,
+  sanitizeConclusion,
 };

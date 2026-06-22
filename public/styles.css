@@ -447,6 +447,53 @@ button {
   padding: 14px;
 }
 
+.score-unavailable .score-topline strong {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.score-factors {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.score-factors > span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.score-factors ul {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.score-factors li strong,
+.score-factors li span {
+  display: block;
+}
+
+.score-factors li span {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.score-factors.missing li::marker {
+  color: var(--amber);
+}
+
+.score-factors.positive li::marker {
+  color: var(--green);
+}
+
 .evidence-checklist {
   padding: 16px;
 }

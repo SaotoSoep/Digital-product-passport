@@ -3,7 +3,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
-const { analyzeProductUrl, buildAiPageText } = require("../src/analyzer");
+process.env.DEEP_READER_WORKER_URL = "";
+
+const { analyzeProductUrl, buildAiPageText, sanitizeConclusion } = require("../src/analyzer");
 const { buildProductPageEvidence } = require("../src/lib/product-passport/evidence");
 const { buildPassportReadiness } = require("../src/lib/product-passport/readiness");
 const {
@@ -15,6 +17,13 @@ const { buildDeepEvidenceHtml } = require("../src/lib/product-page/deep-reader")
 function fixture(name) {
   return fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
 }
+
+test("removes product-level sustainability verdicts from model conclusions", () => {
+  const result = sanitizeConclusion("This overshirt is a sustainable choice because it uses organic cotton.");
+
+  assert.doesNotMatch(result, /sustainable choice/i);
+  assert.match(result, /without judging the product itself/i);
+});
 
 test("normalizes found and not_found ProductPageSnapshot fields", () => {
   const snapshot = extractProductPageSnapshot(
@@ -134,6 +143,9 @@ test("adds normalized product-page evidence to the report using an OSKA-style fi
     assert.equal(evidence.fields.certifications.status, "not_found");
     assert.equal(evidence.fields.durabilityClaims.status, "not_found");
     assert.equal(analysis.report.passportReadiness.status, "partial");
+    assert.equal(analysis.report.transparencyScore.status, "scored");
+    assert.equal(analysis.report.claimStrengthScore.status, "not_available");
+    assert.equal(analysis.report.claimStrengthScore.score, null);
     assert(analysis.report.passportReadiness.missingFields.some((item) => item.key === "proofDocuments"));
     assert.match(evidence.fields.materialComposition.values[0], /katoen/);
     assert.match(evidence.fields.careText.values[0], /Wasvoorschrift/);
@@ -319,6 +331,10 @@ test("reports bot verification blocks and still fetches public brand context", a
     assert.equal(analysis.metadata.productPageSnapshot.likelyBrand, "Zara");
     assert.equal(analysis.metadata.productPageSnapshot.likelyProductName, "LINEN BLEND SAROUEL TROUSERS");
     assert.equal(analysis.report.accessDiagnostics.type, "bot_verification");
+    assert.equal(analysis.report.transparencyScore.status, "not_available");
+    assert.equal(analysis.report.transparencyScore.score, null);
+    assert.equal(analysis.report.claimStrengthScore.status, "not_available");
+    assert.equal(analysis.report.claimStrengthScore.score, null);
     assert.equal(analysis.report.brandInsight.status, "found");
     assert.equal(analysis.report.brandInsight.brand, "Zara");
     assert(analysis.report.brandInsight.sources.some((source) => source.url.includes("inditex.com")));
