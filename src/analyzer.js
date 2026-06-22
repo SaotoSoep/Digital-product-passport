@@ -15,6 +15,9 @@ const {
   buildCanonicalClaims,
   buildCanonicalEvidenceLedger,
   buildProductPageEvidence,
+  buildScoringEligibility,
+  mergeUserProvidedEvidence,
+  refreshEvidenceSummary,
 } = require("./lib/product-passport/evidence");
 const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 const { scoreProductPassport } = require("./lib/product-passport/scorer");
@@ -25,6 +28,7 @@ const AI_PAGE_TEXT_LIMIT = 8000;
 const DEFAULT_ANALYSIS_DEEP_READER_TIMEOUT_MS = 25000;
 const MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS = 30000;
 const MIN_LOCAL_DEEP_READER_FALLBACK_MS = 5000;
+const MAX_USER_PROVIDED_EVIDENCE_CHARS = 250000;
 
 const SYSTEM_PROMPT = `You are a product transparency analyst. You receive raw text scraped from a fashion or consumer product page and return a structured Product Passport Report as JSON.
 
@@ -343,6 +347,76 @@ function cleanText(text) {
   return decodeHtmlEntities(String(text || ""))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function normalizeUserProvidedEvidence(input, now = new Date()) {
+  if (input === null || input === undefined) {
+    return null;
+  }
+
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("User-provided evidence must be an object");
+  }
+
+  const kind = String(input.kind || "").trim();
+  if (!new Set(["visible_text", "html_file"]).has(kind)) {
+    throw new Error("User-provided evidence kind must be visible_text or html_file");
+  }
+
+  const content = String(input.content || "").replace(/\u0000/g, "").trim();
+  if (content.length < 20) {
+    throw new Error("User-provided evidence must contain at least 20 characters");
+  }
+  if (content.length > MAX_USER_PROVIDED_EVIDENCE_CHARS) {
+    throw new Error(`User-provided evidence must not exceed ${MAX_USER_PROVIDED_EVIDENCE_CHARS} characters`);
+  }
+
+  const rawFileName = String(input.fileName || "").replace(/\\/g, "/").split("/").pop().trim();
+  const fileName = rawFileName ? rawFileName.slice(0, 160) : null;
+  if (kind === "html_file" && !fileName) {
+    throw new Error("An HTML file name is required for user-provided HTML evidence");
+  }
+
+  return {
+    kind,
+    content,
+    fileName,
+    label: kind === "html_file"
+      ? `User-provided HTML file: ${fileName}`
+      : "User-provided visible product text",
+    providedAt: now.toISOString(),
+  };
+}
+
+function userProvidedEvidenceHtml(evidence) {
+  if (!evidence) return "";
+  if (evidence.kind === "html_file") return evidence.content;
+
+  const paragraphs = evidence.content
+    .split(/\n+/)
+    .map((line) => cleanText(line))
+    .filter(Boolean)
+    .map((line, index) => index === 0
+      ? `<h1>${escapeHtml(line)}</h1>`
+      : `<p>${escapeHtml(line)}</p>`)
+    .join("\n");
+  return `<!doctype html><html><body><main>${paragraphs}</main></body></html>`;
+}
+
+function userProvidedEvidenceDescriptor(evidence) {
+  return evidence ? {
+    ...evidence,
+    contentLength: evidence.content.length,
+  } : null;
 }
 
 function getOpenAiClient() {
@@ -806,7 +880,50 @@ function sourceLabelForDeepReadFailure(reason) {
 }
 
 function deepReadBlockedNote() {
-  return "The product page could not be fully read from the production browser worker. Hidden sections may not have been accessible. Missing fields below should be interpreted as unavailable, not confirmed absent.";
+  return "The product page could not be fully read from the production browser worker. Fields that may depend on hidden sections are unavailable, not confirmed absent; successful basic extraction remains authoritative.";
+}
+
+function deepReadFailureCode(deepPageReadEvidence, accessDiagnostics = null) {
+  const reason = cleanText(
+    deepPageReadEvidence?.failureReason || accessDiagnostics?.type || accessDiagnostics?.detail
+  ).toLowerCase();
+  if (/timeout/.test(reason)) return "timeout";
+  if (/bot|captcha|verification/.test(reason)) return "blocked_by_bot_protection";
+  if (/access|denied|forbidden|http_access_block/.test(reason)) return "access_denied";
+  if (/unsupported|rendering/.test(reason)) return "unsupported_rendering";
+  return "deep_read_unavailable";
+}
+
+function buildBlockedPageState({ productPageSnapshot, deepPageReadEvidence, accessDiagnostics, userProvidedEvidence }) {
+  const publicFailed = !productPageSnapshot || productPageSnapshot.extractionStatus === "failed";
+  const deepFailed = deepPageReadEvidence?.status === "failed";
+  if (!publicFailed && !deepFailed && !accessDiagnostics) {
+    return null;
+  }
+
+  const reasonCode = deepReadFailureCode(deepPageReadEvidence, accessDiagnostics);
+  const reasons = {
+    timeout: "The retailer page did not finish responding within the allowed time.",
+    blocked_by_bot_protection: "The retailer returned a bot-verification or CAPTCHA challenge instead of readable product content.",
+    access_denied: "The retailer denied access to some or all product-page content.",
+    unsupported_rendering: "The product page uses a rendering pattern the reader could not process reliably.",
+    deep_read_unavailable: "The deeper page reader could not access all product-page content.",
+  };
+
+  return {
+    status: publicFailed ? "blocked" : "partially_blocked",
+    reasonCode,
+    reason: accessDiagnostics?.detail || reasons[reasonCode],
+    basicExtractionStatus: productPageSnapshot?.extractionStatus || "failed",
+    deepReadStatus: deepPageReadEvidence?.status || "unavailable",
+    retryGuidance: [
+      "Retry the public page later; retailer blocking and timeouts can be temporary.",
+      "Paste only product text that you can already see in your own browser.",
+      "Or select an HTML file you saved yourself for this one-off analysis.",
+    ],
+    userProvidedEvidenceUsed: Boolean(userProvidedEvidence),
+    protectionBypassAttempted: false,
+  };
 }
 
 function deepReadShouldMakeMissingUnavailable(deepPageReadEvidence) {
@@ -1386,7 +1503,7 @@ function collectReportFallbacks(report) {
   return fallbackByKey;
 }
 
-function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
+function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence, basicProductPageEvidence = null) {
   if (!productPageEvidence) {
     return productPageEvidence;
   }
@@ -1398,9 +1515,22 @@ function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
         continue;
       }
 
-      field.source = "product_page_deep_read";
-      field.sourceLabel = "Product page deep read";
-      field.note = "Found after production browser reading, including visible page content and any opened product sections.";
+      const basicField = basicProductPageEvidence?.fields?.[field.key];
+      const basicValues = new Set((basicField?.values || []).map((value) => cleanText(value).toLowerCase()));
+      const deepReadAddedValue = field.values.some(
+        (value) => !basicValues.has(cleanText(value).toLowerCase())
+      );
+      if (basicField?.status === "found" && !deepReadAddedValue) {
+        field.source = "product_page_basic_extraction";
+        field.sourceLabel = "Product page basic extraction";
+        field.note = "Found by basic extraction; this remains the authoritative source even when a deep read also succeeds.";
+      } else {
+        field.source = "product_page_deep_read";
+        field.sourceLabel = "Product page deep read";
+        field.note = basicField?.status === "found"
+          ? "Production browser reading added evidence beyond the values already found by basic extraction."
+          : "Found only after production browser reading opened or rendered additional product content.";
+      }
     }
 
     return productPageEvidence;
@@ -1414,7 +1544,7 @@ function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
   const sourceLabel = sourceLabelForDeepReadFailure(deepPageReadEvidence.failureReason);
   const note = deepReadBlockedNote();
   for (const field of Object.values(fields)) {
-    if (field.status !== "not_found") {
+    if (field.status !== "not_found" || !field.deepReadDependent) {
       continue;
     }
 
@@ -1424,16 +1554,7 @@ function applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence) {
     field.note = note;
   }
 
-  const fieldList = Object.values(fields);
-  productPageEvidence.missingFields = fieldList
-    .filter((field) => field.status === "not_found")
-    .map((field) => field.label);
-  productPageEvidence.unavailableFields = fieldList
-    .filter((field) => field.status === "unavailable")
-    .map((field) => field.label);
-  productPageEvidence.foundFields = fieldList
-    .filter((field) => field.status === "found")
-    .map((field) => field.label);
+  refreshEvidenceSummary(productPageEvidence);
   productPageEvidence.summary = `${note} Product-page extraction found ${productPageEvidence.foundFields.length} checked field(s). ${productPageEvidence.unavailableFields.length} field(s) remain unavailable.`;
   productPageEvidence.deepReadNote = note;
 
@@ -1504,16 +1625,93 @@ function alignReportWithCanonicalEvidence(report, evidence) {
   };
 }
 
-function withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence = null) {
+function unavailableScore(kind, reason) {
+  return {
+    status: "not_available",
+    score: null,
+    outOf: 100,
+    rationale: reason,
+    factors: [],
+    topPositiveFactors: [],
+    missingFactors: [],
+    deductions: [],
+    cap: null,
+    kind,
+  };
+}
+
+function scoresMeetingMinimumEvidence(productPageEvidence) {
+  const eligibility = buildScoringEligibility(productPageEvidence);
+  const userProvidedUsed = Object.values(productPageEvidence.fields || {})
+    .some((field) => field.source === "user_provided_evidence");
+  const scoringFields = Object.fromEntries(
+    Object.entries(productPageEvidence.fields || {}).map(([key, field]) => {
+      if (
+        field.source === "user_provided_evidence" &&
+        ["certifications", "productIdentifiers"].includes(key)
+      ) {
+        return [key, { ...field, status: "not_found", values: [] }];
+      }
+      return [key, field];
+    })
+  );
+  const scoringEvidence = (eligibility.transparency.eligible || eligibility.claimStrength.eligible) &&
+    productPageEvidence.extractionStatus === "failed"
+    ? { ...productPageEvidence, fields: scoringFields, extractionStatus: "partial" }
+    : { ...productPageEvidence, fields: scoringFields };
+  const scores = scoreProductPassport(scoringEvidence);
+
+  if (userProvidedUsed) {
+    for (const score of [scores.transparencyScore, scores.claimStrengthScore]) {
+      if (score.status === "scored") {
+        score.rationale = `${score.rationale} The rubric includes separately labeled user-provided evidence; it is not independent verification.`;
+      }
+    }
+  }
+
+  return {
+    scoringEligibility: eligibility,
+    transparencyScore: eligibility.transparency.eligible
+      ? scores.transparencyScore
+      : unavailableScore("transparency", eligibility.transparency.reason),
+    claimStrengthScore: eligibility.claimStrength.eligible
+      ? scores.claimStrengthScore
+      : unavailableScore("claim_strength", eligibility.claimStrength.reason),
+  };
+}
+
+function withProductPageEvidence(
+  report,
+  productPageSnapshot,
+  deepPageReadEvidence = null,
+  userProvidedEvidence = null,
+  basicProductPageSnapshot = productPageSnapshot
+) {
   const productPageEvidence = buildProductPageEvidence(
     productPageSnapshot,
     collectReportFallbacks(report)
   );
-  const checkedProductPageEvidence = applyDeepReadAvailability(productPageEvidence, deepPageReadEvidence);
+  const basicProductPageEvidence = basicProductPageSnapshot
+    ? buildProductPageEvidence(basicProductPageSnapshot)
+    : null;
+  const checkedProductPageEvidence = applyDeepReadAvailability(
+    productPageEvidence,
+    deepPageReadEvidence,
+    basicProductPageEvidence
+  );
+  if (userProvidedEvidence) {
+    const providedHtml = userProvidedEvidenceHtml(userProvidedEvidence);
+    const providedSnapshot = extractProductPageSnapshot(providedHtml, "user-provided://evidence");
+    mergeUserProvidedEvidence(
+      checkedProductPageEvidence,
+      providedSnapshot,
+      userProvidedEvidenceDescriptor(userProvidedEvidence)
+    );
+  }
   buildCanonicalEvidenceLedger(checkedProductPageEvidence);
   const alignedReport = alignReportWithCanonicalEvidence(report, checkedProductPageEvidence);
   const claimCitations = buildCanonicalClaims(alignedReport, checkedProductPageEvidence);
-  const deterministicScores = scoreProductPassport(checkedProductPageEvidence);
+  const deterministicScores = scoresMeetingMinimumEvidence(checkedProductPageEvidence);
   const deepReadNote = deepReadShouldMakeMissingUnavailable(deepPageReadEvidence)
     ? deepReadBlockedNote()
     : "";
@@ -1532,6 +1730,13 @@ function withProductPageEvidence(report, productPageSnapshot, deepPageReadEviden
       : deepPageReadEvidence,
     deepReadMode,
     deepReadNote,
+    blockedPage: buildBlockedPageState({
+      productPageSnapshot,
+      deepPageReadEvidence,
+      accessDiagnostics: report.accessDiagnostics || productPageSnapshot?.accessIssue || null,
+      userProvidedEvidence,
+    }),
+    userProvidedEvidence: checkedProductPageEvidence.userProvidedEvidence || null,
     productPageEvidence: checkedProductPageEvidence,
     evidenceLedger: checkedProductPageEvidence.evidenceLedger,
     claimCitations,
@@ -1770,6 +1975,8 @@ function buildAiFailureReport({
   brandInsight,
   extracted,
   message,
+  userProvidedEvidence,
+  basicProductPageSnapshot,
 }) {
   const report = {
     error: true,
@@ -1822,11 +2029,27 @@ function buildAiFailureReport({
       productPageSnapshot,
       deepPageReadEvidence,
     },
-    report: withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence),
+    report: withProductPageEvidence(
+      report,
+      productPageSnapshot,
+      deepPageReadEvidence,
+      userProvidedEvidence,
+      basicProductPageSnapshot
+    ),
   };
 }
 
-function buildPartialReport(productUrl, retailer, note, productPageSnapshot, brandInsight = null, accessDiagnostics = null, deepPageReadEvidence = null) {
+function buildPartialReport(
+  productUrl,
+  retailer,
+  note,
+  productPageSnapshot,
+  brandInsight = null,
+  accessDiagnostics = null,
+  deepPageReadEvidence = null,
+  userProvidedEvidence = null,
+  basicProductPageSnapshot = productPageSnapshot
+) {
   const report = {
     note,
     productSummary: `${retailer} product link received, but the page content could not be reliably read. This is a limited fallback report.`,
@@ -1894,7 +2117,13 @@ function buildPartialReport(productUrl, retailer, note, productPageSnapshot, bra
       productPageSnapshot,
       deepPageReadEvidence,
     },
-    report: withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence),
+    report: withProductPageEvidence(
+      report,
+      productPageSnapshot,
+      deepPageReadEvidence,
+      userProvidedEvidence,
+      basicProductPageSnapshot
+    ),
   };
 }
 
@@ -2033,7 +2262,7 @@ function createDeepReadTimeout(productUrl) {
   return createFailedDeepRead(productUrl, "page timeout");
 }
 
-async function analyzeProductUrl(productUrl) {
+async function analyzeProductUrl(productUrl, options = {}) {
   if (!productUrl || typeof productUrl !== "string") {
     throw new Error("Product URL is required");
   }
@@ -2045,6 +2274,12 @@ async function analyzeProductUrl(productUrl) {
   } catch (error) {
     throw new Error("Product URL is required");
   }
+
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error("Product URL must start with http:// or https://");
+  }
+
+  const userProvidedEvidence = normalizeUserProvidedEvidence(options.userProvidedEvidence);
 
   const retailer = parsedUrl.hostname.replace(/^www\./, "");
   const fallbackNote = "Could not reliably read the product page. This report is based on limited available data.";
@@ -2059,7 +2294,7 @@ async function analyzeProductUrl(productUrl) {
     MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS
   );
 
-  let html;
+  let html = "";
   const deepReadPromise = withTimeout(
     readProductPageDeepEvidence(productUrl, deepReaderTimeoutMs),
     deepReaderTimeoutMs + 500,
@@ -2071,6 +2306,8 @@ async function analyzeProductUrl(productUrl) {
   const [deepPageReadResult, htmlResult] = await Promise.all([deepReadPromise, htmlPromise]);
   let deepPageReadEvidence = deepPageReadResult;
   let productPageSnapshot;
+  let basicProductPageSnapshot;
+  const accessDiagnostics = htmlResult.error?.accessIssue || null;
 
   if (htmlResult.error) {
     const error = htmlResult.error;
@@ -2079,63 +2316,68 @@ async function analyzeProductUrl(productUrl) {
       const inferredBrand = inferBrandFromUrl(productUrl);
       const inferredProductName = inferProductNameFromUrl(productUrl);
       html = `<!doctype html><html><head><title>${inferredProductName} | ${inferredBrand}</title><meta name="brand" content="${inferredBrand}" /></head><body>${deepEvidenceHtml}</body></html>`;
-    } else {
-    const inferredBrand = inferBrandFromUrl(productUrl);
-    const inferredProductName = inferProductNameFromUrl(productUrl);
-    productPageSnapshot = createFailedProductPageSnapshot(
-      productUrl,
-      error.message || "unable to fetch product page",
-      new Date(),
-      error.accessIssue || null
-    );
-
-    if (inferredBrand !== "not_found") {
-      productPageSnapshot.likelyBrand = inferredBrand;
-      productPageSnapshot.extractionNotes.push(`likely brand inferred from URL: ${inferredBrand}`);
-    }
-
-    if (inferredProductName !== "not_found") {
-      productPageSnapshot.likelyProductName = inferredProductName;
-      productPageSnapshot.extractionNotes.push(`likely product name inferred from URL: ${inferredProductName}`);
-    }
-
-    const brandInsight = await withTimeout(
-      fetchBrandInsight({
-        brand: inferredBrand,
+      basicProductPageSnapshot = createFailedProductPageSnapshot(
         productUrl,
-        productHtml: "",
-      }),
-      6500,
-      brandInsightTimeoutFallback(inferredBrand)
-    );
-    if (!deepPageReadEvidence || deepPageReadEvidence.status === "skipped") {
-      deepPageReadEvidence = createFailedDeepRead(
-        productUrl,
-        error.accessIssue && error.accessIssue.type === "bot_verification"
-          ? "blocked by bot protection"
-          : error.accessIssue && error.accessIssue.type === "access_denied_page"
-          ? "access denied"
-          : error.message || "page timeout"
+        error.message || "unable to fetch product page",
+        new Date(),
+        accessDiagnostics
       );
-    }
-    return buildPartialReport(
-      productUrl,
-      retailer,
-      error.accessIssue ? error.accessIssue.detail : fallbackNote,
-      productPageSnapshot,
-      brandInsight,
-      error.accessIssue || null,
-      deepPageReadEvidence
-    );
+    } else {
+      const inferredBrand = inferBrandFromUrl(productUrl);
+      const inferredProductName = inferProductNameFromUrl(productUrl);
+      productPageSnapshot = createFailedProductPageSnapshot(
+        productUrl,
+        error.message || "unable to fetch product page",
+        new Date(),
+        accessDiagnostics
+      );
+
+      if (inferredBrand !== "not_found") {
+        productPageSnapshot.likelyBrand = inferredBrand;
+        productPageSnapshot.extractionNotes.push(`likely brand inferred from URL: ${inferredBrand}`);
+      }
+
+      if (inferredProductName !== "not_found") {
+        productPageSnapshot.likelyProductName = inferredProductName;
+        productPageSnapshot.extractionNotes.push(`likely product name inferred from URL: ${inferredProductName}`);
+      }
+
+      basicProductPageSnapshot = productPageSnapshot;
+      if (!deepPageReadEvidence || deepPageReadEvidence.status === "skipped") {
+        deepPageReadEvidence = createFailedDeepRead(
+          productUrl,
+          accessDiagnostics?.type === "bot_verification"
+            ? "blocked by bot protection"
+            : accessDiagnostics?.type === "access_denied_page"
+            ? "access denied"
+            : error.message || "page timeout"
+        );
+      }
     }
   } else {
     html = htmlResult.value;
+    basicProductPageSnapshot = extractProductPageSnapshot(html, productUrl);
   }
 
   const deepEvidenceHtml = buildDeepEvidenceHtml(deepPageReadEvidence);
-  const analysisHtml = appendDeepEvidenceHtml(html, deepEvidenceHtml);
+  const analysisHtml = htmlResult.error && deepEvidenceHtml
+    ? html
+    : appendDeepEvidenceHtml(html, deepEvidenceHtml);
 
-  productPageSnapshot = extractProductPageSnapshot(analysisHtml, productUrl);
+  if (!productPageSnapshot || deepEvidenceHtml) {
+    productPageSnapshot = extractProductPageSnapshot(analysisHtml, productUrl);
+    if (accessDiagnostics) {
+      productPageSnapshot.accessIssue = accessDiagnostics;
+    }
+  }
+
+  const providedHtml = userProvidedEvidenceHtml(userProvidedEvidence);
+  const analysisInputHtml = providedHtml
+    ? `${analysisHtml}\n<section data-evidence-source="user-provided">${providedHtml}</section>`
+    : analysisHtml;
+  const providedSnapshot = providedHtml
+    ? extractProductPageSnapshot(providedHtml, "user-provided://evidence")
+    : null;
 
   const extracted = {
     openGraphTitle: extractMetaContent(html, "property", "og:title"),
@@ -2145,7 +2387,7 @@ async function analyzeProductUrl(productUrl) {
     pageTitle: extractTitle(html),
   };
 
-  const visibleHtml = removeNonVisibleMarkup(analysisHtml);
+  const visibleHtml = removeNonVisibleMarkup(analysisInputHtml);
   const bodyText = stripTags(visibleHtml);
   const snippets = uniqueSnippets([
     ...extractTextBlocks(visibleHtml),
@@ -2157,12 +2399,32 @@ async function analyzeProductUrl(productUrl) {
     extracted.metaDescription || extracted.openGraphDescription
   );
 
-  const title = extracted.openGraphTitle || extracted.twitterTitle || extracted.pageTitle;
+  const title = extracted.openGraphTitle || extracted.twitterTitle || extracted.pageTitle ||
+    (providedSnapshot?.pageTitle !== "not_found" ? providedSnapshot?.pageTitle : "");
   const description = extracted.metaDescription || extracted.openGraphDescription;
   const pageReadable = Boolean(title || description || visibleProductText || snippets.length > 0);
 
   if (!pageReadable) {
-    return buildPartialReport(productUrl, retailer, fallbackNote, productPageSnapshot);
+    const brandInsight = await withTimeout(
+      fetchBrandInsight({
+        brand: productPageSnapshot.likelyBrand,
+        productUrl,
+        productHtml: html,
+      }),
+      6500,
+      brandInsightTimeoutFallback(productPageSnapshot.likelyBrand)
+    );
+    return buildPartialReport(
+      productUrl,
+      retailer,
+      accessDiagnostics?.detail || fallbackNote,
+      productPageSnapshot,
+      brandInsight,
+      accessDiagnostics,
+      deepPageReadEvidence,
+      userProvidedEvidence,
+      basicProductPageSnapshot
+    );
   }
 
   const brandInsightPromise = withTimeout(
@@ -2199,6 +2461,8 @@ async function analyzeProductUrl(productUrl) {
       extracted,
       deepPageReadEvidence,
       message: error.message || "Analysis failed",
+      userProvidedEvidence,
+      basicProductPageSnapshot,
     });
   }
 
@@ -2209,6 +2473,9 @@ async function analyzeProductUrl(productUrl) {
     brandInsight,
     productPageSnapshot,
   });
+  if (accessDiagnostics) {
+    report.accessDiagnostics = accessDiagnostics;
+  }
 
   return {
     metadata: {
@@ -2219,13 +2486,21 @@ async function analyzeProductUrl(productUrl) {
       productPageSnapshot,
       deepPageReadEvidence,
     },
-    report: withProductPageEvidence(report, productPageSnapshot, deepPageReadEvidence),
+    report: withProductPageEvidence(
+      report,
+      productPageSnapshot,
+      deepPageReadEvidence,
+      userProvidedEvidence,
+      basicProductPageSnapshot
+    ),
   };
 }
 
 module.exports = {
   analyzeProductUrl,
   buildAiPageText,
+  buildBlockedPageState,
+  normalizeUserProvidedEvidence,
   readProductPageDeepEvidence,
   sanitizeConclusion,
 };

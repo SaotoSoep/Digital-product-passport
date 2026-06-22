@@ -32,7 +32,9 @@ export default async (request) => {
   }
 
   try {
-    const report = await analyzeProductUrl(body.productUrl);
+    const report = await analyzeProductUrl(body.productUrl, {
+      userProvidedEvidence: body.userProvidedEvidence,
+    });
     return new Response(JSON.stringify(report), {
       status: 200,
       headers: {
@@ -40,7 +42,7 @@ export default async (request) => {
       },
     });
   } catch (error) {
-    const status = error.message === "Product URL is required" ? 400 : 500;
+    const status = /^(Product URL|User-provided evidence|An HTML file name)/.test(error.message || "") ? 400 : 500;
     return new Response(
       JSON.stringify({ error: error.message || "Unexpected error" }),
       {

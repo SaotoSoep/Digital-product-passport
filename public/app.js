@@ -6,16 +6,31 @@ const stageList = document.getElementById("stage-list");
 const reportPanel = document.getElementById("report");
 const reportHeader = document.getElementById("report-header");
 const reportOverview = document.getElementById("report-overview");
-const reportBody = document.getElementById("report-body");
+const consumerReportPanel = document.getElementById("report-panel-report");
+const technicalReportPanel = document.getElementById("report-panel-technical");
 const tabButtons = Array.from(document.querySelectorAll(".tab-button"));
 const exampleButtons = Array.from(document.querySelectorAll("[data-example-url]"));
+const blockedFallback = document.getElementById("blocked-fallback");
+const blockedReasonCode = document.getElementById("blocked-reason-code");
+const blockedReason = document.getElementById("blocked-reason");
+const blockedGuidance = document.getElementById("blocked-guidance");
+const retryAnalysisButton = document.getElementById("retry-analysis-button");
+const providedEvidenceForm = document.getElementById("provided-evidence-form");
+const providedText = document.getElementById("provided-text");
+const providedHtml = document.getElementById("provided-html");
+const providedEvidenceButton = document.getElementById("provided-evidence-button");
+const duplicateChoice = document.getElementById("duplicate-choice");
+const duplicateMessage = document.getElementById("duplicate-message");
+const openExistingButton = document.getElementById("open-existing-button");
+const analysisOnlyButton = document.getElementById("analysis-only-button");
+const saveDuplicateButton = document.getElementById("save-duplicate-button");
 
 const stages = [
   "Read page",
   "Extract product data",
-  "Analyze passport gaps",
+  "Identify unknowns",
   "Check claims",
-  "Save draft passport",
+  "Save report draft",
 ];
 
 const checkedEvidenceFields = [
@@ -109,7 +124,8 @@ const dppFieldDescriptions = {
 };
 
 let currentModel = null;
-let activeTab = "overview";
+let activeTab = "report";
+let pendingDuplicate = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -162,6 +178,7 @@ function evidenceSourceLabel(source) {
     interpretation: "Interpretation",
     product_page_deep_read: "Product page deep read",
     product_page_basic_extraction: "Product page basic extraction",
+    user_provided_evidence: "User-provided evidence",
     brand_page: "Brand page",
     public_database: "Public database",
     agent_interpretation: "Agent interpretation",
@@ -262,7 +279,7 @@ function fieldDisplayValue(field, fallback) {
 function usefulReportText(value) {
   const text = cleanReadableText(value);
 
-  if (!text || /^(no clear|not found|care information not found|origin\/manufacturing information not found|supplier\/factory information not found|material not found)/i.test(text)) {
+  if (!text || /^(no clear|not found|product name not found|brand not found|care information not found|origin\/manufacturing information not found|supplier\/factory information not found|material not found)/i.test(text)) {
     return "";
   }
 
@@ -302,7 +319,9 @@ function fallbackPassportReadiness(fields, evidenceFields) {
     .map((item) => ({
       key: item.key,
       label: item.label,
-      detail: "Not found in the current product-page analysis.",
+      detail: item.status === "unavailable"
+        ? "The source could not be read well enough to determine whether this is disclosed."
+        : "Checked on the available product page, but not found.",
     }));
 
   return {
@@ -580,6 +599,7 @@ function extractModel(response, submittedUrl) {
   const foundCount = evidenceFields.filter((item) => item.status === "found").length;
   const checkedCount = evidenceFields.length;
   const missingCount = evidenceFields.filter((item) => item.status === "not_found").length;
+  const unavailableCount = evidenceFields.filter((item) => item.status === "unavailable").length;
 
   return {
     submittedUrl,
@@ -628,12 +648,15 @@ function extractModel(response, submittedUrl) {
     deepPageReadEvidence: report.deepPageReadEvidence || metadata.deepPageReadEvidence || null,
     deepReadMode: report.deepReadMode || report.deepPageReadEvidence?.mode || metadata.deepPageReadEvidence?.mode || "",
     deepReadNote: report.deepReadNote || report.deepPageReadEvidence?.note || metadata.deepPageReadEvidence?.note || "",
+    blockedPage: report.blockedPage || null,
+    userProvidedEvidence: report.userProvidedEvidence || evidence?.userProvidedEvidence || null,
     accessDiagnostics,
     passportReadiness,
     evidenceFields,
     foundCount,
     checkedCount,
     missingCount,
+    unavailableCount,
     transparencyScore: scoreValue(report.transparencyScore),
     claimScore: scoreValue(report.claimStrengthScore),
     productSummary,
@@ -710,6 +733,26 @@ function renderDeepPageReadEvidence(model) {
           ? `<p class="source-line">${escapeHtml(cleanReadableText(evidence.note || model.deepReadNote))}</p>`
           : ""
       }
+    </article>
+  `;
+}
+
+function renderUserProvidedEvidence(model) {
+  const evidence = model.userProvidedEvidence;
+  if (!evidence) return "";
+
+  const fields = Object.values(evidence.fields || {});
+  return `
+    <article class="evidence-checklist user-provided-card">
+      <div class="checklist-header">
+        <div>
+          <span class="mini-label">User-provided evidence</span>
+          <h3>${escapeHtml(displayText(evidence.label || "User-provided product content"))}</h3>
+        </div>
+        <span class="coverage-pill">not independently fetched</span>
+      </div>
+      <p class="source-line">Used only for this analysis and kept separate from public retailer-page evidence. It is not independent verification.</p>
+      <p class="source-line">${fields.length} extracted field group(s) · ${Number(evidence.contentLength || 0)} characters provided</p>
     </article>
   `;
 }
@@ -835,11 +878,12 @@ function renderFieldBlock(title, field, emptyText) {
 }
 
 function renderEvidenceChecklist(model) {
+  const evidenceLabel = model.userProvidedEvidence ? "Evidence used" : "Checked on product page";
   return `
     <article class="evidence-checklist">
       <div class="checklist-header">
         <div>
-          <span class="mini-label">Checked on product page</span>
+          <span class="mini-label">${escapeHtml(evidenceLabel)}</span>
           <h3>${model.foundCount}/${model.checkedCount} relevant fields found</h3>
         </div>
         <span class="coverage-pill">${model.missingCount} not found</span>
@@ -995,9 +1039,9 @@ function renderClaimItem(claim, evidenceRecordIndex = new Map()) {
 
 function passportStatusLabel(status) {
   const labels = {
-    draft: "Draft",
+    draft: "Saved report draft",
     "analysis only": "Analysis only",
-    stored: "Stored",
+    stored: "Saved report",
   };
 
   return labels[status] || status;
@@ -1031,14 +1075,14 @@ function renderReportHeader(model) {
 
   reportHeader.innerHTML = `
     <div>
-      <p class="section-kicker">${escapeHtml(model.retailer)}</p>
+      <p class="section-kicker">Independent report · ${escapeHtml(model.retailer)}</p>
       <h2>${escapeHtml(model.productName)}</h2>
       <p>${escapeHtml(model.brand)}</p>
     </div>
     <div class="result-meta">
       <span class="verdict-pill ${verdict.tone}">${escapeHtml(verdict.label)}</span>
       ${statusBadge(model.extractionStatus)}
-      ${passportId ? `<span>Draft ${escapeHtml(passportId)}</span>` : ""}
+      ${passportId ? `<span>Analysis ${escapeHtml(passportId)}</span>` : ""}
       ${createdAt ? `<span>${escapeHtml(createdAt)}</span>` : ""}
       <span>${escapeHtml(passportStatusLabel(status))}</span>
     </div>
@@ -1047,69 +1091,51 @@ function renderReportHeader(model) {
 
 function renderReportOverview(model) {
   const verdict = buildVerdict(model);
-  const coverageSummary = model.deepReadNote || (model.extractionStatus === "failed"
-    ? "Product-page extraction failed. Fallback values remain separated from product-page evidence."
-    : `Product-page extraction found ${model.foundCount} of ${model.checkedCount} relevant fields. Fields that were not found are listed separately in the Gaps tab. Fallback values remain separated from product-page evidence.`);
+  const displayedClaims = consumerClaims(model);
 
   reportOverview.innerHTML = `
     <div class="verdict-card ${verdict.tone}">
-      <span class="mini-label">Agent read</span>
+      <span class="mini-label">Independent read</span>
       <h3>${escapeHtml(verdict.label)}</h3>
       <p>${escapeHtml(cleanReadableText(verdict.summary))}</p>
     </div>
 
-    ${renderScore("Transparency", model.transparencyScore)}
-    ${renderScore("Claim strength", model.claimScore)}
-
-    <div class="score-card">
+    <div class="score-card glance-card">
       <div class="score-topline">
-        <span>Page evidence</span>
+        <span>Known</span>
         <strong>${model.foundCount}/${model.checkedCount}</strong>
       </div>
-      <p>${escapeHtml(cleanReadableText(coverageSummary))}</p>
+      <p>Checked product fields supported by available evidence.</p>
     </div>
 
-    <div class="score-card">
+    <div class="score-card glance-card">
       <div class="score-topline">
-        <span>Passport gaps</span>
-        <strong>${Number(model.passportReadiness?.counts?.missing || 0)}</strong>
+        <span>Claims</span>
+        <strong>${displayedClaims.length || model.claimValues.length}</strong>
       </div>
-      <p>${escapeHtml(cleanReadableText(model.passportReadiness?.summary || "Product-passport readiness analysis was not returned."))}</p>
+      <p>Claim rows found for evidence review.</p>
     </div>
 
-    <div class="score-card">
+    <div class="score-card glance-card missing-glance">
       <div class="score-topline">
-        <span>Brand context</span>
-        <strong>${escapeHtml(statusLabel(model.brandInsight.status))}</strong>
+        <span>Missing</span>
+        <strong>${model.missingCount}</strong>
       </div>
-      <p>${escapeHtml(cleanReadableText(model.brandInsight.summary))}</p>
+      <p>Checked on available content, but not found.</p>
     </div>
 
-    ${
-      model.accessDiagnostics
-        ? `<div class="score-card">
-            <div class="score-topline">
-              <span>Access</span>
-              <strong>${escapeHtml(displayText(model.accessDiagnostics.type || "blocked"))}</strong>
-            </div>
-            <p>${escapeHtml(displayText(model.accessDiagnostics.detail))}</p>
-          </div>`
-        : ""
-    }
+    <div class="score-card glance-card unavailable-glance">
+      <div class="score-topline">
+        <span>Unavailable</span>
+        <strong>${model.unavailableCount}</strong>
+      </div>
+      <p>Could not be determined because source content was unavailable.</p>
+    </div>
 
     <dl class="passport-facts">
       <div>
-        <dt>Input</dt>
+        <dt>Product source</dt>
         <dd><a href="${escapeHtml(model.submittedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(model.submittedUrl)}</a></dd>
-      </div>
-      ${
-        model.responseLinks.public
-          ? `<div><dt>Public API</dt><dd>${escapeHtml(model.responseLinks.public)}</dd></div>`
-          : ""
-      }
-      <div>
-        <dt>Source read</dt>
-        <dd>${escapeHtml(model.sourceUrl)}</dd>
       </div>
     </dl>
   `;
@@ -1122,6 +1148,7 @@ function renderOverviewTab(model) {
   return `
     <section class="stack">
       ${renderPassportReadiness(model)}
+      ${renderUserProvidedEvidence(model)}
       ${renderDeepPageReadEvidence(model)}
       ${renderEvidenceChecklist(model)}
       <div class="content-grid">
@@ -1151,13 +1178,16 @@ function renderOverviewTab(model) {
 
 function renderClaimsTab(model) {
   const displayedClaims = model.claimCitations.length > 0 ? model.claimCitations : model.claims;
+  const claimStrengthSummary = model.claimScore.status === "not_available"
+    ? "Not available"
+    : `${Number(model.claimScore.score)}/100`;
   const claimRows = displayedClaims.length > 0
     ? displayedClaims.map((claim) => renderClaimItem(claim, model.evidenceRecordIndex)).join("")
     : `<article class="empty-row"><h3>No claim rows</h3><p>The analyzer did not return structured sustainability claims for this URL.</p></article>`;
 
   return `
     <section class="stack">
-      ${renderSummaryCard("Claim strength", `${model.claimScore}/100`, "Not found.", { wide: true })}
+      ${renderSummaryCard("Claim strength", claimStrengthSummary, "Not found.", { wide: true })}
       <div class="section-divider">
         <span>Claim analysis</span>
       </div>
@@ -1303,34 +1333,414 @@ function renderGapsTab(model) {
   `;
 }
 
+function renderReportSection(id, title, description, content) {
+  return `
+    <section class="consumer-section" aria-labelledby="${escapeHtml(id)}">
+      <div class="consumer-section-heading">
+        <h3 id="${escapeHtml(id)}">${escapeHtml(title)}</h3>
+        ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+      </div>
+      <div class="consumer-section-content">${content}</div>
+    </section>
+  `;
+}
+
+function renderMaterialExplanation(model) {
+  const materialCards = model.materialItems.map((item) => `
+    <article class="material-card">
+      <div class="material-card-heading">
+        <h4>${escapeHtml(item.name)}</h4>
+        ${item.percentage ? `<span>${escapeHtml(item.percentage)}</span>` : ""}
+      </div>
+      <p>${escapeHtml(item.explanation || "No plain-language explanation was returned for this material.")}</p>
+    </article>
+  `).join("");
+  const fieldStatus = normalizeStatus(model.fields.materialComposition?.status);
+
+  return `
+    ${model.materialExplanation ? `<p class="section-summary">${escapeHtml(model.materialExplanation)}</p>` : ""}
+    ${materialCards ? `<div class="material-grid">${materialCards}</div>` : ""}
+    ${renderFieldBlock(
+      "Material composition",
+      model.fields.materialComposition,
+      fieldStatus === "unavailable"
+        ? "Material information is unavailable because the source could not be read well enough."
+        : "Material composition was checked but not found."
+    )}
+  `;
+}
+
+function renderConsumerClaims(model) {
+  const displayedClaims = consumerClaims(model);
+  const structuredClaims = displayedClaims.length > 0
+    ? displayedClaims.map((claim) => renderClaimItem(claim, model.evidenceRecordIndex)).join("")
+    : "";
+  const claimValues = model.claimValues.length > 0
+    ? `<article class="claim-row">
+        <div class="row-header"><h4>Claim wording found on the product page</h4>${statusBadge("found")}</div>
+        <ul class="plain-list">${model.claimValues.map((claim) => `<li>${escapeHtml(claim)}</li>`).join("")}</ul>
+        ${renderCitations(model.fields.sustainabilityClaims?.citationRecords)}
+      </article>`
+    : "";
+  const noClaims = !structuredClaims && !claimValues
+    ? `<article class="information-state missing-information">
+        <h4>No clear product claim found</h4>
+        <p>The available product content was checked, but no clear environmental or ethical product claim was found.</p>
+      </article>`
+    : "";
+
+  return `${structuredClaims}${claimValues}${noClaims}`;
+}
+
+function consumerClaims(model) {
+  const candidates = model.claimCitations.length > 0 ? model.claimCitations : model.claims;
+  const claimCategories = new Set([
+    "sustainability",
+    "environmental",
+    "ethical",
+    "certification",
+    "durability",
+    "repair",
+    "warranty",
+    "claim",
+  ]);
+
+  return candidates.filter((claim) => {
+    const category = displayText(claim.category).toLowerCase();
+    const sourceType = displayText(claim.sourceType || claim.type).toLowerCase();
+    const verificationStatus = displayText(claim.verificationStatus).toLowerCase();
+
+    if (sourceType === "missing_information" || verificationStatus === "not_found") {
+      return false;
+    }
+
+    return claimCategories.has(category) ||
+      sourceType === "brand_statement" ||
+      sourceType === "external_evidence" ||
+      /brand statement|independent|unverified/.test(verificationStatus);
+  });
+}
+
+function buildConsumerConclusion(model) {
+  const claims = consumerClaims(model);
+  const evidenceStatement = model.extractionStatus === "failed"
+    ? "The product page could not be read reliably enough to establish product facts."
+    : `The available evidence supports ${model.foundCount} of ${model.checkedCount} checked product fields.`;
+  const claimStatement = claims.length > 0 || model.claimValues.length > 0
+    ? "Product claim wording was found and is presented as a claim, not as independent proof or a product verdict."
+    : "No clear environmental or ethical product claim was found in the available content.";
+  const missingStatement = model.missingCount > 0
+    ? `${model.missingCount} checked field${model.missingCount === 1 ? " was" : "s were"} not found.`
+    : "No checked fields are marked as missing.";
+  const unavailableStatement = model.unavailableCount > 0
+    ? `${model.unavailableCount} field${model.unavailableCount === 1 ? " is" : "s are"} unavailable because source content could not be assessed reliably.`
+    : "No checked fields are marked as unavailable.";
+
+  return [evidenceStatement, claimStatement, missingStatement, unavailableStatement].join(" ");
+}
+
+function buildKnownSummary(model) {
+  const productName = usefulReportText(model.productName);
+  const brand = usefulReportText(model.brand);
+  const identity = productName
+    ? `${productName}${brand ? ` by ${brand}` : ""}.`
+    : "The exact product identity could not be confirmed from the available evidence.";
+  const coverage = model.extractionStatus === "failed"
+    ? "The source was not readable enough to confirm product-level details."
+    : `${model.foundCount} of ${model.checkedCount} checked product fields are supported by available evidence.`;
+
+  return `${identity} ${coverage}`;
+}
+
+function renderConsumerSources(model) {
+  const reportSources = model.sources.map((source) => {
+    const sourceType = evidenceSourceLabel(source.source || source.type) || "Source";
+    const label = cleanReadableText(source.label || sourceType);
+    return `
+      <article class="source-row">
+        <strong>${escapeHtml(sourceType)}</strong>
+        ${isValidProductUrl(label)
+          ? `<a href="${escapeHtml(label)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+          : `<span>${escapeHtml(label)}</span>`}
+      </article>
+    `;
+  });
+  const brandSources = (model.brandInsight.sources || []).map((source) => `
+    <article class="source-row">
+      <strong>Public brand context</strong>
+      ${isValidProductUrl(source.url)
+        ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(brandSourceLinkLabel(source))}</a>`
+        : `<span>${escapeHtml(displayText(source.label || source.topic || "Brand source"))}</span>`}
+    </article>
+  `);
+  const rows = [...reportSources, ...brandSources];
+
+  if (rows.length === 0) {
+    rows.push(`
+      <article class="source-row">
+        <strong>Submitted product page</strong>
+        <a href="${escapeHtml(model.submittedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(model.submittedUrl)}</a>
+      </article>
+    `);
+  }
+
+  return `<div class="source-list">${rows.join("")}</div>`;
+}
+
+function renderUnknownGroup(title, description, items, className, emptyText) {
+  return `
+    <article class="information-state ${className}">
+      <div class="information-state-heading">
+        <h4>${escapeHtml(title)}</h4>
+        <span>${items.length}</span>
+      </div>
+      <p>${escapeHtml(description)}</p>
+      ${items.length > 0
+        ? `<ul>${items.map((item) => `<li>${escapeHtml(cleanReadableText(item))}</li>`).join("")}</ul>`
+        : `<p class="state-empty">${escapeHtml(emptyText)}</p>`}
+    </article>
+  `;
+}
+
+function renderConsumerUnknowns(model) {
+  const missing = model.evidenceFields
+    .filter((item) => item.status === "not_found")
+    .map((item) => item.label);
+  const unavailable = model.evidenceFields
+    .filter((item) => item.status === "unavailable")
+    .map((item) => item.label);
+
+  return `
+    <div class="information-state-grid">
+      ${renderUnknownGroup(
+        "Missing information",
+        "The available product content was checked, but these details were not found.",
+        missing,
+        "missing-information",
+        "No checked fields are currently marked as missing."
+      )}
+      ${renderUnknownGroup(
+        "Unavailable information",
+        "The source could not be read well enough to determine whether these details are disclosed.",
+        unavailable,
+        "unavailable-information",
+        "No checked fields are currently marked as unavailable."
+      )}
+    </div>
+    ${renderUnknownGroup(
+      "Other unknowns or unverified points",
+      "These points remain unknown or are not independently verified by this report.",
+      model.unknowns,
+      "unverified-information",
+      "No additional unknowns were returned."
+    )}
+  `;
+}
+
+function renderConsumerReport(model) {
+  const originStatus = normalizeStatus(model.fields.productionOrigin?.status);
+  const careStatus = normalizeStatus(model.fields.careText?.status);
+  const verdict = buildVerdict(model);
+
+  return `
+    <div class="consumer-report">
+      ${renderReportSection(
+        "report-known",
+        "What is known",
+        "Product facts supported by the available page evidence.",
+        `<div class="content-grid">
+          ${renderSummaryCard("Evidence summary", buildKnownSummary(model), "No reliable product summary is available.", { wide: true })}
+          ${renderStructuredSummaryCard("Product identifiers", model.identifierValues, "Not found.")}
+          ${renderStructuredSummaryCard("Colour or variant", model.colorVariantValues, "Not found.", {
+            includeLabels: ["Color", "Color reference"],
+            labelOrder: ["Color", "Color reference"],
+            uniqueLabels: true,
+          })}
+        </div>`
+      )}
+      ${renderReportSection(
+        "report-materials",
+        "Materials explained",
+        "Composition as disclosed, with plain-language context where available.",
+        renderMaterialExplanation(model)
+      )}
+      ${renderReportSection(
+        "report-claims",
+        "Claims and evidence",
+        "Brand or retailer claims are shown as claims, alongside their evidence and verification status.",
+        renderConsumerClaims(model)
+      )}
+      ${renderReportSection(
+        "report-origin",
+        "Origin and manufacturing",
+        "Country, supplier, and factory details found for this product.",
+        renderStructuredSummaryCard("Origin evidence", model.productionOriginValues, originStatus === "unavailable"
+          ? "Origin information is unavailable because the source could not be read well enough."
+          : "Origin and manufacturing information was checked but not found.", {
+          wide: true,
+          citations: [...(model.fields.productionOrigin?.citationRecords || []), ...(model.fields.supplierDetails?.citationRecords || [])],
+          includeLabels: ["Country", "Supplier", "Factory", "Address", "Employees"],
+          labelOrder: ["Country", "Supplier", "Factory", "Address", "Employees"],
+          uniqueLabels: true,
+        })
+      )}
+      ${renderReportSection(
+        "report-care",
+        "Care guidance",
+        "Care information can affect product life and use, but it is not a durability guarantee.",
+        renderFieldBlock("Care instructions", model.fields.careText, careStatus === "unavailable"
+          ? "Care information is unavailable because the source could not be read well enough."
+          : "Care information was checked but not found.")
+      )}
+      ${renderReportSection(
+        "report-scores",
+        "Disclosure and claim scores",
+        "These scores measure disclosure coverage and claim-evidence strength, not whether the product is environmentally preferable.",
+        `<div class="score-grid">${renderScore("Disclosure coverage", model.transparencyScore)}${renderScore("Claim-evidence strength", model.claimScore)}</div>`
+      )}
+      ${renderReportSection(
+        "report-conclusion",
+        "Conclusion",
+        "A cautious reading of what the available evidence supports.",
+        `<article class="conclusion-card ${verdict.tone}">
+          <span class="verdict-pill ${verdict.tone}">${escapeHtml(verdict.label)}</span>
+          <p>${escapeHtml(buildConsumerConclusion(model))}</p>
+          <small>Independent interpretation — not a compliance decision or product certification.</small>
+        </article>`
+      )}
+      ${renderReportSection(
+        "report-sources",
+        "Sources",
+        "Public pages and labeled inputs used for this report.",
+        renderConsumerSources(model)
+      )}
+      ${renderReportSection(
+        "report-unknowns",
+        "Unknowns and unavailable information",
+        "Missing means checked but not found; unavailable means the source could not be assessed reliably.",
+        renderConsumerUnknowns(model)
+      )}
+    </div>
+  `;
+}
+
+function renderTechnicalDisclosure(title, description, content, open = false) {
+  return `
+    <details class="technical-disclosure"${open ? " open" : ""}>
+      <summary>
+        <span>${escapeHtml(title)}</span>
+        <small>${escapeHtml(description)}</small>
+      </summary>
+      <div class="technical-disclosure-content">${content}</div>
+    </details>
+  `;
+}
+
+function renderRawEvidence(model) {
+  const fieldRows = model.evidenceFields
+    .map(({ key, label }) => renderFieldBlock(label, model.fields[key], `${label} was not returned.`))
+    .join("");
+
+  return `
+    ${renderEvidenceChecklist(model)}
+    <div class="stack raw-evidence-list">
+      ${fieldRows}
+      ${renderFieldBlock("Page title", model.fields.pageTitle, "Page title was not returned.")}
+      ${renderFieldBlock("Canonical URL", model.fields.canonicalUrl, "Canonical URL was not returned.")}
+    </div>
+  `;
+}
+
+function renderTechnicalReport(model) {
+  const accessNote = model.accessDiagnostics
+    ? `<article class="gap-list"><h3>Access diagnostic</h3><p><strong>${escapeHtml(displayText(model.accessDiagnostics.type || "Access issue"))}:</strong> ${escapeHtml(displayText(model.accessDiagnostics.detail))}</p></article>`
+    : `<p class="muted">No access diagnostic was returned.</p>`;
+  const metadata = `
+    <dl class="passport-facts technical-facts">
+      <div><dt>Submitted URL</dt><dd>${escapeHtml(model.submittedUrl)}</dd></div>
+      <div><dt>Source read</dt><dd>${escapeHtml(model.sourceUrl)}</dd></div>
+      <div><dt>Extraction status</dt><dd>${escapeHtml(statusLabel(model.extractionStatus))}</dd></div>
+      ${model.storedPassport?.id ? `<div><dt>Saved analysis ID</dt><dd>${escapeHtml(model.storedPassport.id)}</dd></div>` : ""}
+    </dl>
+  `;
+
+  return `
+    <div class="technical-report">
+      <div class="technical-intro">
+        <h3>Technical details</h3>
+        <p>Diagnostics, normalized evidence, and report-readiness internals are preserved here for deeper review.</p>
+      </div>
+      ${renderTechnicalDisclosure(
+        "Evidence capture and access",
+        "Deep-reader status, user-provided evidence, and access diagnostics.",
+        `${renderUserProvidedEvidence(model)}${renderDeepPageReadEvidence(model)}${accessNote}`,
+        Boolean(model.accessDiagnostics)
+      )}
+      ${renderTechnicalDisclosure(
+        "Passport-readiness internals",
+        "Field mapping for future passport workflows; this is not official DPP readiness.",
+        renderPassportReadiness(model)
+      )}
+      ${renderTechnicalDisclosure(
+        "Raw normalized evidence",
+        "Every checked product field and its citations remain accessible.",
+        renderRawEvidence(model)
+      )}
+      ${renderTechnicalDisclosure(
+        "Brand context",
+        "Public brand pages kept separate from product-level evidence.",
+        renderBrandTab(model)
+      )}
+      ${renderTechnicalDisclosure(
+        "Report metadata",
+        "Source and saved-analysis identifiers.",
+        metadata
+      )}
+    </div>
+  `;
+}
+
 function renderActiveTab() {
   if (!currentModel) {
     return;
   }
 
-  const tabRenderers = {
-    overview: renderOverviewTab,
-    claims: renderClaimsTab,
-    durability: renderDurabilityTab,
-    brand: renderBrandTab,
-    gaps: renderGapsTab,
-  };
-
-  reportBody.innerHTML = tabRenderers[activeTab](currentModel);
   tabButtons.forEach((tabButton) => {
     const selected = tabButton.dataset.tab === activeTab;
     tabButton.classList.toggle("active", selected);
     tabButton.setAttribute("aria-selected", String(selected));
+    tabButton.setAttribute("tabindex", selected ? "0" : "-1");
   });
+  consumerReportPanel.hidden = activeTab !== "report";
+  technicalReportPanel.hidden = activeTab !== "technical";
 }
 
 function renderReport(response, submittedUrl) {
   currentModel = extractModel(response, submittedUrl);
-  activeTab = "overview";
+  activeTab = "report";
   renderReportHeader(currentModel);
   renderReportOverview(currentModel);
+  consumerReportPanel.innerHTML = renderConsumerReport(currentModel);
+  technicalReportPanel.innerHTML = renderTechnicalReport(currentModel);
   renderActiveTab();
   reportPanel.classList.remove("hidden");
+  renderRecoveryState(currentModel);
+}
+
+function renderRecoveryState(model) {
+  const blocked = model.blockedPage;
+  if (!blocked) {
+    blockedFallback.classList.add("hidden");
+    return;
+  }
+
+  blockedReasonCode.textContent = displayMachineStatus(blocked.reasonCode, "unavailable");
+  blockedReason.textContent = cleanReadableText(blocked.reason || "Some product-page content was unavailable.");
+  const guidance = Array.isArray(blocked.retryGuidance) ? blocked.retryGuidance : [];
+  blockedGuidance.innerHTML = guidance
+    .map((item) => `<li>${escapeHtml(cleanReadableText(item))}</li>`)
+    .join("");
+  blockedFallback.classList.remove("hidden");
 }
 
 function renderError(error, submittedUrl) {
@@ -1338,7 +1748,7 @@ function renderError(error, submittedUrl) {
   reportHeader.innerHTML = `
     <div>
       <p class="section-kicker">Analysis stopped</p>
-      <h2>Could not create a Product Passport</h2>
+      <h2>Could not create an independent report</h2>
       <p>${escapeHtml(submittedUrl)}</p>
     </div>
     <div class="result-meta">
@@ -1347,44 +1757,69 @@ function renderError(error, submittedUrl) {
   `;
   reportOverview.innerHTML = `
     <div class="verdict-card risk">
-      <span class="mini-label">Agent read</span>
+      <span class="mini-label">Independent read</span>
       <h3>No reliable result</h3>
       <p>${escapeHtml(error.message || "Unable to analyze this URL.")}</p>
     </div>
   `;
-  reportBody.innerHTML = `
+  consumerReportPanel.innerHTML = `
     <article class="empty-row">
       <h3>No fallback report was generated</h3>
       <p>This report only shows extracted or returned evidence. It does not fill the report with sample product data when the live read fails.</p>
     </article>
   `;
+  technicalReportPanel.innerHTML = "";
+  activeTab = "report";
+  tabButtons.forEach((tabButton) => {
+    const selected = tabButton.dataset.tab === activeTab;
+    tabButton.classList.toggle("active", selected);
+    tabButton.setAttribute("aria-selected", String(selected));
+    tabButton.setAttribute("tabindex", selected ? "0" : "-1");
+  });
+  consumerReportPanel.hidden = false;
+  technicalReportPanel.hidden = true;
   reportPanel.classList.remove("hidden");
 }
 
-async function analyzeProduct(productUrl) {
+class ApiRequestError extends Error {
+  constructor(message, status, payload = {}) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+async function analyzeProduct(productUrl, userProvidedEvidence = null) {
   const response = await fetch("/api/analyze", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ productUrl }),
+    body: JSON.stringify({
+      productUrl,
+      ...(userProvidedEvidence ? { userProvidedEvidence } : {}),
+    }),
   });
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody.error || "Unable to analyze the product URL.");
+    throw new ApiRequestError(errorBody.error || "Unable to analyze the product URL.", response.status, errorBody);
   }
 
   return response.json();
 }
 
-async function createProductPassport(productUrl) {
+async function createProductPassport(productUrl, options = {}) {
   const response = await fetch("/api/passports", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ productUrl }),
+    body: JSON.stringify({
+      productUrl,
+      allowDuplicate: options.allowDuplicate === true,
+    }),
   });
 
   if (response.status === 404 || response.status === 405) {
@@ -1397,10 +1832,51 @@ async function createProductPassport(productUrl) {
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody.error || "Unable to create the product passport.");
+    throw new ApiRequestError(errorBody.error || "Unable to create the independent report.", response.status, errorBody);
   }
 
   return response.json();
+}
+
+async function fetchPassport(url) {
+  const response = await fetch(url);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ApiRequestError(body.error || "Unable to open the existing report draft.", response.status, body);
+  }
+  return body;
+}
+
+function showDuplicateChoice(error, productUrl) {
+  pendingDuplicate = {
+    productUrl,
+    existingUrl: error.payload?.links?.self || "",
+  };
+  duplicateMessage.textContent = error.message;
+  duplicateChoice.classList.remove("hidden");
+  setStatus("A report draft already exists. Choose how this retry should continue.", "warning");
+}
+
+async function runAnalysisOnly(productUrl, userProvidedEvidence = null, message = "Analysis complete without saving a report draft.") {
+  setStatus("Analyzing without saving another report draft...", "active");
+  button.disabled = true;
+  retryAnalysisButton.disabled = true;
+  providedEvidenceButton.disabled = true;
+  try {
+    const analysis = await analyzeProduct(productUrl, userProvidedEvidence);
+    renderStages(stages.length - 1, "complete");
+    renderReport({ ...analysis, fallbackMode: "analysis-only" }, productUrl);
+    duplicateChoice.classList.add("hidden");
+    setStatus(message, "success");
+    return analysis;
+  } catch (error) {
+    setStatus(error.message || "Unable to analyze the product URL.", "error");
+    throw error;
+  } finally {
+    button.disabled = false;
+    retryAnalysisButton.disabled = false;
+    providedEvidenceButton.disabled = false;
+  }
 }
 
 tabButtons.forEach((tabButton) => {
@@ -1408,6 +1884,45 @@ tabButtons.forEach((tabButton) => {
     activeTab = tabButton.dataset.tab;
     renderActiveTab();
   });
+
+  tabButton.addEventListener("keydown", (event) => {
+    const currentIndex = tabButtons.indexOf(tabButton);
+    let nextIndex = null;
+
+    if (event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % tabButtons.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + tabButtons.length) % tabButtons.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = tabButtons.length - 1;
+    }
+
+    if (nextIndex === null) {
+      return;
+    }
+
+    event.preventDefault();
+    activeTab = tabButtons[nextIndex].dataset.tab;
+    renderActiveTab();
+    tabButtons[nextIndex].focus();
+  });
+});
+
+document.addEventListener("keydown", (event) => {
+  const summary = event.target.closest?.("summary");
+  if (!summary || (event.key !== "Enter" && event.key !== " ")) {
+    return;
+  }
+
+  const details = summary.parentElement;
+  if (!(details instanceof HTMLDetailsElement)) {
+    return;
+  }
+
+  event.preventDefault();
+  details.open = !details.open;
 });
 
 exampleButtons.forEach((exampleButton) => {
@@ -1418,11 +1933,97 @@ exampleButtons.forEach((exampleButton) => {
   });
 });
 
+retryAnalysisButton.addEventListener("click", () => {
+  const productUrl = currentModel?.submittedUrl || input.value.trim();
+  if (!isValidProductUrl(productUrl)) {
+    setStatus("Enter a valid product URL before retrying.", "warning");
+    return;
+  }
+  runAnalysisOnly(productUrl, null, "Public page retry complete. No additional report draft was saved.")
+    .catch(() => {});
+});
+
+providedEvidenceForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const productUrl = currentModel?.submittedUrl || input.value.trim();
+  const pastedText = providedText.value.trim();
+  const file = providedHtml.files?.[0] || null;
+
+  if (pastedText && file) {
+    setStatus("Choose either pasted text or one saved HTML file for this analysis.", "warning");
+    return;
+  }
+  if (!pastedText && !file) {
+    setStatus("Paste visible product text or select a saved HTML file.", "warning");
+    return;
+  }
+
+  let evidence;
+  if (file) {
+    if (!/\.html?$/i.test(file.name) && file.type !== "text/html") {
+      setStatus("Select an HTML file ending in .html or .htm.", "warning");
+      return;
+    }
+    evidence = {
+      kind: "html_file",
+      content: await file.text(),
+      fileName: file.name,
+    };
+  } else {
+    evidence = {
+      kind: "visible_text",
+      content: pastedText,
+    };
+  }
+
+  await runAnalysisOnly(
+    productUrl,
+    evidence,
+    "One-off analysis complete. User-provided evidence was not saved as a new report draft."
+  ).catch(() => {});
+});
+
+openExistingButton.addEventListener("click", async () => {
+  if (!pendingDuplicate?.existingUrl) return;
+  try {
+    const response = await fetchPassport(pendingDuplicate.existingUrl);
+    renderReport(response, pendingDuplicate.productUrl);
+    duplicateChoice.classList.add("hidden");
+    setStatus("Existing report draft opened. No duplicate was created.", "success");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+analysisOnlyButton.addEventListener("click", () => {
+  if (!pendingDuplicate) return;
+  runAnalysisOnly(
+    pendingDuplicate.productUrl,
+    null,
+    "Retry complete without saving another report draft."
+  ).catch(() => {});
+});
+
+saveDuplicateButton.addEventListener("click", async () => {
+  if (!pendingDuplicate) return;
+  setStatus("Saving another report draft after your explicit choice...", "active");
+  try {
+    const response = await createProductPassport(pendingDuplicate.productUrl, { allowDuplicate: true });
+    renderReport(response, pendingDuplicate.productUrl);
+    duplicateChoice.classList.add("hidden");
+    setStatus(`Another report draft was saved by explicit choice. Analysis ${response.passport?.id || "created"}.`, "success");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const productUrl = input.value.trim();
   reportPanel.classList.add("hidden");
+  blockedFallback.classList.add("hidden");
+  duplicateChoice.classList.add("hidden");
 
   if (!productUrl) {
     setStatus("Enter a product URL to continue.", "warning");
@@ -1453,14 +2054,19 @@ form.addEventListener("submit", async (event) => {
     renderStages(stages.length - 1, "complete");
     renderReport(analysis, productUrl);
 
-    const passportId = analysis.passport?.id ? ` Draft ${analysis.passport.id}.` : "";
-    const mode = analysis.fallbackMode === "analysis-only" ? "Analysis complete without passport storage." : "Draft passport saved.";
-    setStatus(`${mode}${passportId}`, "success");
+    const reportId = analysis.passport?.id ? ` Analysis ${analysis.passport.id}.` : "";
+    const mode = analysis.fallbackMode === "analysis-only" ? "Analysis complete without saving a report draft." : "Report draft saved.";
+    setStatus(`${mode}${reportId}`, "success");
   } catch (error) {
     window.clearInterval(stageTimer);
+    if (error.status === 409 && error.payload?.code === "duplicate_draft") {
+      renderStages(activeStage, "idle");
+      showDuplicateChoice(error, productUrl);
+      return;
+    }
     renderStages(activeStage, "error");
     renderError(error, productUrl);
-    setStatus(error.message || "Unable to create the product passport.", "error");
+    setStatus(error.message || "Unable to create the independent report.", "error");
   } finally {
     button.disabled = false;
     button.textContent = "Analyze";

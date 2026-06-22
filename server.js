@@ -91,10 +91,12 @@ const server = http.createServer(async (request, response) => {
   if (method === "POST" && requestUrl.pathname === "/api/analyze") {
     try {
       const body = await collectRequestBody(request);
-      const report = await analyzeProductUrl(body.productUrl);
+      const report = await analyzeProductUrl(body.productUrl, {
+        userProvidedEvidence: body.userProvidedEvidence,
+      });
       sendJson(response, 200, report);
     } catch (error) {
-      const statusCode = error.message === "Product URL is required" ? 400 : 500;
+      const statusCode = /^(Product URL|User-provided evidence|An HTML file name)/.test(error.message || "") ? 400 : 500;
       sendJson(response, statusCode, {
         error: error.message || "Unexpected error",
       });

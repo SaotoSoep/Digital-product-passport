@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const {
   analyzeProductUrl,
+  buildBlockedPageState,
   readProductPageDeepEvidence,
 } = require("../src/analyzer");
 const {
@@ -190,6 +191,26 @@ test("times out worker calls and returns timeout fallback", async () => {
   assert.equal(result.status, "failed");
   assert.equal(result.failureReason, "page timeout");
   assert.equal(result.mode, "Deep read timeout");
+  assert.deepEqual(
+    buildBlockedPageState({
+      productPageSnapshot: { extractionStatus: "partial" },
+      deepPageReadEvidence: result,
+    }),
+    {
+      status: "partially_blocked",
+      reasonCode: "timeout",
+      reason: "The retailer page did not finish responding within the allowed time.",
+      basicExtractionStatus: "partial",
+      deepReadStatus: "failed",
+      retryGuidance: [
+        "Retry the public page later; retailer blocking and timeouts can be temporary.",
+        "Paste only product text that you can already see in your own browser.",
+        "Or select an HTML file you saved yourself for this one-off analysis.",
+      ],
+      userProvidedEvidenceUsed: false,
+      protectionBypassAttempted: false,
+    }
+  );
 });
 
 test("marks unfound fields unavailable when production deep read is access denied", async () => {
@@ -242,6 +263,8 @@ test("marks unfound fields unavailable when production deep read is access denie
     assert.match(analysis.report.deepReadNote, /not confirmed absent/);
     assert.equal(fields.materialComposition.status, "found");
     assert.equal(fields.materialComposition.source, "product_page_basic_extraction");
+    assert.equal(fields.productIdentifiers.status, "not_found");
+    assert.equal(fields.productIdentifiers.source, "product_page_basic_extraction");
     assert.equal(fields.careText.status, "unavailable");
     assert.equal(fields.careText.source, "product_page_deep_read");
     assert.equal(fields.careText.sourceLabel, "Deep read blocked");
@@ -256,6 +279,55 @@ test("marks unfound fields unavailable when production deep read is access denie
     } else {
       process.env.DEEP_READER_WORKER_URL = originalWorkerUrl;
     }
+  }
+});
+
+test("keeps blocked user-provided evidence separate from fetched evidence", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const requestedUrl = String(url);
+    if (requestedUrl === "https://blocked.example/product") {
+      return {
+        ok: false,
+        status: 403,
+        url: requestedUrl,
+        headers: { get: () => "text/html; charset=utf-8" },
+        text: async () => "<html><title>Access denied</title><body>Access denied</body></html>",
+      };
+    }
+    return {
+      ok: false,
+      status: 404,
+      url: requestedUrl,
+      headers: { get: () => "text/html; charset=utf-8" },
+      text: async () => "<html><title>Not found</title></html>",
+    };
+  };
+
+  try {
+    const analysis = await analyzeProductUrl("https://blocked.example/product", {
+      userProvidedEvidence: {
+        kind: "visible_text",
+        content: "Linen travel shirt\nMaterial composition: 100% linen",
+      },
+    });
+    const material = analysis.report.productPageEvidence.fields.materialComposition;
+    const record = analysis.report.evidenceLedger.records
+      .find((item) => material.evidenceIds.includes(item.id));
+
+    assert.equal(analysis.report.blockedPage.status, "blocked");
+    assert.equal(analysis.report.blockedPage.userProvidedEvidenceUsed, true);
+    assert.equal(material.status, "found");
+    assert.equal(material.source, "user_provided_evidence");
+    assert.equal(material.sourceUrl, null);
+    assert.equal(record.sourceType, "user_provided_evidence");
+    assert.equal(record.verificationStatus, "user_provided");
+    assert.equal(record.sourceUrl, null);
+    assert.equal(analysis.report.userProvidedEvidence.kind, "visible_text");
+    assert.equal(analysis.report.transparencyScore.status, "not_available");
+    assert.match(analysis.report.transparencyScore.rationale, /at least two substantive/i);
+  } finally {
+    global.fetch = originalFetch;
   }
 });
 

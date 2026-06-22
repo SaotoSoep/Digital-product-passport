@@ -4,6 +4,7 @@ const EVIDENCE_SOURCE_TYPES = Object.freeze({
   BRAND_STATEMENT: "brand_statement",
   PUBLIC_PAGE: "public_page_evidence",
   EXTERNAL: "external_evidence",
+  USER_PROVIDED: "user_provided_evidence",
   MISSING: "missing_information",
   INTERPRETATION: "interpretation",
 });
@@ -50,48 +51,56 @@ const FIELD_DEFINITIONS = [
     label: "Product description",
     snapshotKey: "productDescriptionText",
     type: "list",
+    deepReadDependent: true,
   },
   {
     key: "materialComposition",
     label: "Material/composition",
     snapshotKey: "materialCompositionText",
     type: "list",
+    deepReadDependent: true,
   },
   {
     key: "careText",
     label: "Care text",
     snapshotKey: "careText",
     type: "list",
+    deepReadDependent: true,
   },
   {
     key: "sustainabilityClaims",
     label: "Sustainability claim text",
     snapshotKey: "sustainabilityClaimSnippets",
     type: "list",
+    deepReadDependent: true,
   },
   {
     key: "supplierDetails",
     label: "Supplier/factory details",
     snapshotKey: "supplierDetailText",
     type: "list",
+    deepReadDependent: true,
   },
   {
     key: "productionOrigin",
     label: "Origin/manufacturing",
     snapshotKey: "originText",
     type: "list",
+    deepReadDependent: true,
   },
   {
     key: "certifications",
     label: "Certification or standard references",
     snapshotKey: "certificationText",
     type: "list",
+    deepReadDependent: true,
   },
   {
     key: "durabilityClaims",
     label: "Durability, repair, or warranty claims",
     snapshotKey: "durabilityClaimSnippets",
     type: "list",
+    deepReadDependent: true,
   },
 ];
 
@@ -153,6 +162,7 @@ function verificationStatus(sourceType, status) {
   if (status === "not_found") return "not_found";
   if (status === "unavailable") return "unavailable";
   if (sourceType === EVIDENCE_SOURCE_TYPES.EXTERNAL) return "independently_verified";
+  if (sourceType === EVIDENCE_SOURCE_TYPES.USER_PROVIDED) return "user_provided";
   if (sourceType === EVIDENCE_SOURCE_TYPES.BRAND_STATEMENT) return "brand_statement_only";
   if (sourceType === EVIDENCE_SOURCE_TYPES.INTERPRETATION) return "interpretation";
   return "source_confirmed";
@@ -165,8 +175,11 @@ function extractionConfidence(field, status, fallback = false) {
 }
 
 function makeEvidenceRecord(field, excerpt, status = field.status, fallback = false) {
-  const sourceType = sourceTypeForField(field.key, status, fallback);
-  const sourceUrl = fallback ? null : field.sourceUrl || null;
+  const userProvided = !fallback && field.source === "user_provided_evidence";
+  const sourceType = userProvided
+    ? EVIDENCE_SOURCE_TYPES.USER_PROVIDED
+    : sourceTypeForField(field.key, status, fallback);
+  const sourceUrl = fallback || userProvided ? null : field.sourceUrl || null;
   const captureMethod = fallback
     ? field.fallback?.source || "agent_interpretation"
     : field.source || "product_page_basic_extraction";
@@ -326,16 +339,25 @@ function buildCanonicalClaims(report, evidence) {
     if (!wording || claims.some((claim) => claim.category === "sustainability" && canonicalPart(claim.originalWording) === canonicalPart(wording))) continue;
     const matches = supportingRecords.filter((record) => wordingMatches(wording, record.excerpt));
     const independent = matches.some((record) => record.sourceType === EVIDENCE_SOURCE_TYPES.EXTERNAL);
+    const userProvided = matches.some((record) => record.sourceType === EVIDENCE_SOURCE_TYPES.USER_PROVIDED);
     claims.push({
       id: `claim_${createHash("sha256").update(canonicalPart(wording)).digest("hex").slice(0, 16)}`,
       category: "sustainability",
       originalWording: wording,
       sourceType: matches[0]?.sourceType || EVIDENCE_SOURCE_TYPES.INTERPRETATION,
-      verificationStatus: independent ? "independently_verified" : matches.length > 0 ? "brand_statement_only" : "interpretation",
+      verificationStatus: independent
+        ? "independently_verified"
+        : userProvided
+        ? "user_provided"
+        : matches.length > 0
+        ? "brand_statement_only"
+        : "interpretation",
       confidenceDimension: matches.length > 0 ? matches[0].extractionConfidence : "low",
       evidenceIds: matches.map((record) => record.id),
       note: matches.length > 0
-        ? "Brand wording is cited, but no separate qualifying source independently verifies it."
+        ? userProvided
+          ? "The wording came from user-provided evidence and was not independently fetched or verified."
+          : "Brand wording is cited, but no separate qualifying source independently verifies it."
         : "AI-generated wording was not present in the evidence ledger and was downgraded to interpretation.",
     });
   }
@@ -405,6 +427,102 @@ function buildField(snapshot, definition, fallbackByKey = {}) {
       ? "Not found in the normalized product-page extraction."
       : "Product-page extraction failed, so this field could not be checked.",
     fallback,
+    deepReadDependent: Boolean(definition.deepReadDependent),
+  };
+}
+
+function refreshEvidenceSummary(evidence) {
+  const fieldList = Object.values(evidence.fields || {});
+  evidence.foundFields = fieldList
+    .filter((field) => field.status === "found")
+    .map((field) => field.label);
+  evidence.missingFields = fieldList
+    .filter((field) => field.status === "not_found")
+    .map((field) => field.label);
+  evidence.unavailableFields = fieldList
+    .filter((field) => field.status === "unavailable")
+    .map((field) => field.label);
+  evidence.fallbackFields = fieldList
+    .filter((field) => field.fallback)
+    .map((field) => field.label);
+  return evidence;
+}
+
+function mergeUserProvidedEvidence(productPageEvidence, providedSnapshot, descriptor = {}) {
+  if (!productPageEvidence || !providedSnapshot) {
+    return productPageEvidence;
+  }
+
+  const providedEvidence = buildProductPageEvidence(providedSnapshot);
+  const label = cleanEvidenceValue(descriptor.label) || "User-provided evidence";
+  const providedAt = descriptor.providedAt || providedSnapshot.extractionTimestamp || null;
+
+  for (const [key, providedField] of Object.entries(providedEvidence.fields)) {
+    const targetField = productPageEvidence.fields[key];
+    if (!targetField || targetField.status === "found" || providedField.status !== "found") {
+      continue;
+    }
+
+    targetField.status = "found";
+    targetField.values = [...providedField.values];
+    targetField.sourceUrl = null;
+    targetField.extractedAt = providedAt;
+    targetField.source = "user_provided_evidence";
+    targetField.sourceLabel = label;
+    targetField.note = "Provided by the user for this one-off analysis; not independently fetched or verified.";
+    targetField.fallback = null;
+  }
+
+  productPageEvidence.userProvidedEvidence = {
+    kind: descriptor.kind || "visible_text",
+    label,
+    fileName: cleanEvidenceValue(descriptor.fileName) || null,
+    providedAt,
+    contentLength: Number(descriptor.contentLength || 0),
+    content: String(descriptor.content || ""),
+    extractionStatus: providedEvidence.extractionStatus,
+    fields: Object.fromEntries(
+      Object.entries(providedEvidence.fields)
+        .filter(([, field]) => field.status === "found")
+        .map(([key, field]) => [key, { label: field.label, values: field.values }])
+    ),
+  };
+
+  refreshEvidenceSummary(productPageEvidence);
+  productPageEvidence.summary = `${productPageEvidence.summary} User-provided evidence is stored separately and only fills fields that public extraction did not find.`;
+  return productPageEvidence;
+}
+
+function buildScoringEligibility(evidence) {
+  const fields = evidence?.fields || {};
+  const found = (key) => fields[key]?.status === "found" && fields[key].values?.length > 0;
+  const hasIdentity = found("productName") || found("productIdentifiers");
+  const disclosureKeys = [
+    "materialComposition",
+    "careText",
+    "productionOrigin",
+    "supplierDetails",
+    "sustainabilityClaims",
+    "certifications",
+    "durabilityClaims",
+  ];
+  const disclosureCount = disclosureKeys.filter(found).length;
+  const hasClaimSupport = ["materialComposition", "certifications", "durabilityClaims"]
+    .some(found);
+
+  return {
+    transparency: {
+      eligible: hasIdentity && disclosureCount >= 2,
+      reason: hasIdentity && disclosureCount >= 2
+        ? "Minimum identity and product-disclosure evidence is present."
+        : "Not available until product identity and at least two substantive disclosure fields are evidenced.",
+    },
+    claimStrength: {
+      eligible: hasIdentity && found("sustainabilityClaims") && hasClaimSupport,
+      reason: hasIdentity && found("sustainabilityClaims") && hasClaimSupport
+        ? "A product claim, product identity, and supporting product evidence are present."
+        : "Not available until a product claim, product identity, and supporting material, certification, or durability evidence are present.",
+    },
   };
 }
 
@@ -475,7 +593,10 @@ module.exports = {
   buildCanonicalClaims,
   buildCanonicalEvidenceLedger,
   buildProductPageEvidence,
+  buildScoringEligibility,
   createCanonicalEvidenceRecord,
   createEvidenceId,
+  mergeUserProvidedEvidence,
+  refreshEvidenceSummary,
   validateClaimCitation,
 };

@@ -2,7 +2,7 @@
 
 Product Passport Agent is a small MVP web app for checking what a fashion product page publicly reveals about a specific clothing item.
 
-Users paste a product URL from a retailer such as Zara, H&M, Uniqlo, Zalando, or ASOS, and the app returns a structured Product Passport Report. The report is consumer-facing and independent. It is not an official brand-issued Digital Product Passport.
+Users paste a product URL from a retailer such as Zara, H&M, Uniqlo, Zalando, or ASOS, and the app returns a structured independent product report. It is not an official EU Digital Product Passport (DPP), a product certification, or a compliance assessment.
 
 ## Current MVP mode
 
@@ -20,19 +20,21 @@ The current UI creates a saved draft Product Passport record from a submitted pr
   - public evidence visible on the page
   - missing or unverified information
 
-## Product Passport Report structure
+## Consumer-first report structure
 
-The current Product Passport Report output is generated from visible page evidence and stored as a draft passport.
+The first report view is generated from visible page evidence and is ordered around what a consumer needs to understand. It always separates known facts, claims, missing information, and information that could not be assessed because a source was unavailable.
 
-- Product summary: a short, plain-language overview of the item.
-- Materials: the main materials explained in simple words.
-- Sustainability claims: any environmental or ethical claims shown on the product page.
-- Evidence level: how strongly each claim is supported by public page content.
-- Missing information: details that are absent, unclear, or not publicly verifiable.
-- Deterministic scores: reproducible disclosure coverage and claim-evidence strength, calculated from canonical product-page evidence.
-- Conclusion: a short consumer-friendly wrap-up of what is known and what is still uncertain.
+- What is known
+- Materials explained
+- Claims and evidence
+- Origin and manufacturing
+- Care guidance
+- Disclosure and claim scores
+- Conclusion
+- Sources
+- Unknowns and unavailable information
 
-Missing or unverifiable information should be shown explicitly and not invented.
+Deep-reader diagnostics, passport-readiness internals, brand context, and every normalized raw-evidence field remain available in the secondary Technical details tab. Missing or unverifiable information is shown explicitly and never invented.
 
 ## Deterministic score rubric
 

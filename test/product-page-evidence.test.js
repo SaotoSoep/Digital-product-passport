@@ -5,7 +5,12 @@ const test = require("node:test");
 
 process.env.DEEP_READER_WORKER_URL = "";
 
-const { analyzeProductUrl, buildAiPageText, sanitizeConclusion } = require("../src/analyzer");
+const {
+  analyzeProductUrl,
+  buildAiPageText,
+  normalizeUserProvidedEvidence,
+  sanitizeConclusion,
+} = require("../src/analyzer");
 const { buildProductPageEvidence } = require("../src/lib/product-passport/evidence");
 const { buildPassportReadiness } = require("../src/lib/product-passport/readiness");
 const {
@@ -23,6 +28,30 @@ test("removes product-level sustainability verdicts from model conclusions", () 
 
   assert.doesNotMatch(result, /sustainable choice/i);
   assert.match(result, /without judging the product itself/i);
+});
+
+test("validates pasted text and saved HTML evidence inputs", () => {
+  const pasted = normalizeUserProvidedEvidence({
+    kind: "visible_text",
+    content: "Product name\nMaterial: 100% linen",
+  }, new Date("2026-06-22T10:00:00.000Z"));
+  const html = normalizeUserProvidedEvidence({
+    kind: "html_file",
+    fileName: "saved-product.html",
+    content: "<html><body><h1>Product</h1></body></html>",
+  });
+
+  assert.equal(pasted.label, "User-provided visible product text");
+  assert.equal(pasted.providedAt, "2026-06-22T10:00:00.000Z");
+  assert.equal(html.fileName, "saved-product.html");
+  assert.throws(
+    () => normalizeUserProvidedEvidence({ kind: "html_file", content: "<html>long enough content</html>" }),
+    /file name is required/i
+  );
+  assert.throws(
+    () => normalizeUserProvidedEvidence({ kind: "visible_text", content: "too short" }),
+    /at least 20 characters/i
+  );
 });
 
 test("normalizes found and not_found ProductPageSnapshot fields", () => {
@@ -335,6 +364,9 @@ test("reports bot verification blocks and still fetches public brand context", a
     assert.equal(analysis.report.transparencyScore.score, null);
     assert.equal(analysis.report.claimStrengthScore.status, "not_available");
     assert.equal(analysis.report.claimStrengthScore.score, null);
+    assert.equal(analysis.report.blockedPage.status, "blocked");
+    assert.equal(analysis.report.blockedPage.reasonCode, "blocked_by_bot_protection");
+    assert.equal(analysis.report.blockedPage.protectionBypassAttempted, false);
     assert.equal(analysis.report.brandInsight.status, "found");
     assert.equal(analysis.report.brandInsight.brand, "Zara");
     assert(analysis.report.brandInsight.sources.some((source) => source.url.includes("inditex.com")));

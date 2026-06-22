@@ -16,9 +16,14 @@
         </a>
         <div class="topbar-status" aria-label="Analysis status">
           <span class="status-light" aria-hidden="true"></span>
-          Evidence-first report
+          Independent evidence report
         </div>
       </header>
+
+      <aside class="trust-disclaimer" role="note" aria-label="Report status disclaimer">
+        <strong>Independent product report.</strong>
+        <span>Not an official EU Digital Product Passport (DPP) and not a compliance assessment.</span>
+      </aside>
 
       <main>
         <section class="workbench" aria-label="Analyze a clothing product">
@@ -57,10 +62,49 @@
             </div>
 
             <ol id="stage-list" class="stage-list" aria-label="Analysis progress"></ol>
+
+            <section id="blocked-fallback" class="recovery-panel hidden" aria-labelledby="blocked-fallback-title">
+              <div class="recovery-heading">
+                <div>
+                  <p class="section-kicker">Retailer page unavailable</p>
+                  <h2 id="blocked-fallback-title">Continue with evidence you can see</h2>
+                </div>
+                <span id="blocked-reason-code" class="status-badge status-unavailable">blocked</span>
+              </div>
+              <p id="blocked-reason" class="recovery-reason"></p>
+              <ul id="blocked-guidance" class="recovery-guidance"></ul>
+              <button type="button" id="retry-analysis-button" class="secondary-button">Retry analysis only</button>
+
+              <form id="provided-evidence-form" class="provided-evidence-form">
+                <label for="provided-text">Visible product text</label>
+                <textarea
+                  id="provided-text"
+                  rows="7"
+                  placeholder="Paste only the product details visible in your own browser, such as product name, material, care, origin, or claim wording."
+                ></textarea>
+                <div class="file-field">
+                  <label for="provided-html">Or select a saved HTML file</label>
+                  <input id="provided-html" type="file" accept="text/html,.html,.htm" />
+                </div>
+                <p class="provenance-note">This is one-off analysis. Your input is labeled as user-provided evidence and never shown as independently fetched or verified.</p>
+                <button type="submit" id="provided-evidence-button">Analyze user-provided evidence</button>
+              </form>
+            </section>
+
+            <section id="duplicate-choice" class="recovery-panel hidden" aria-labelledby="duplicate-choice-title">
+              <p class="section-kicker">Report draft already exists</p>
+              <h2 id="duplicate-choice-title">Choose what this retry should do</h2>
+              <p id="duplicate-message" class="recovery-reason"></p>
+              <div class="choice-actions">
+                <button type="button" id="open-existing-button" class="secondary-button">Open existing report draft</button>
+                <button type="button" id="analysis-only-button" class="secondary-button">Analyze without saving</button>
+                <button type="button" id="save-duplicate-button" class="danger-button">Save another report draft</button>
+              </div>
+            </section>
           </section>
         </section>
 
-        <section id="report" class="report-shell hidden" aria-live="polite">
+        <section id="report" class="report-shell hidden" aria-label="Independent product report">
           <div id="report-header" class="report-header"></div>
 
           <div class="report-layout">
@@ -68,24 +112,47 @@
 
             <section class="report-detail">
               <div class="tabbar" role="tablist" aria-label="Report sections">
-                <button class="tab-button active" type="button" role="tab" aria-selected="true" data-tab="overview">
-                  Overview
+                <button
+                  id="report-tab-report"
+                  class="tab-button active"
+                  type="button"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="report-panel-report"
+                  tabindex="0"
+                  data-tab="report"
+                >
+                  Consumer report
                 </button>
-                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="claims">
-                  Claims
-                </button>
-                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="durability">
-                  Durability
-                </button>
-                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="brand">
-                  Brand
-                </button>
-                <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="gaps">
-                  Gaps
+                <button
+                  id="report-tab-technical"
+                  class="tab-button"
+                  type="button"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="report-panel-technical"
+                  tabindex="-1"
+                  data-tab="technical"
+                >
+                  Technical details
                 </button>
               </div>
 
-              <div id="report-body" class="report-body"></div>
+              <div
+                id="report-panel-report"
+                class="report-body"
+                role="tabpanel"
+                aria-labelledby="report-tab-report"
+                tabindex="0"
+              ></div>
+              <div
+                id="report-panel-technical"
+                class="report-body"
+                role="tabpanel"
+                aria-labelledby="report-tab-technical"
+                tabindex="0"
+                hidden
+              ></div>
             </section>
           </div>
         </section>

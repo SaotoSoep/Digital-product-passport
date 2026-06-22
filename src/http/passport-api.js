@@ -48,6 +48,22 @@ function splitPath(pathname) {
   return pathname.split("/").filter(Boolean);
 }
 
+function normalizedProductUrl(value) {
+  try {
+    return new URL(value).toString();
+  } catch (error) {
+    return "";
+  }
+}
+
+function findExistingDraft(store, productUrl) {
+  const normalized = normalizedProductUrl(productUrl);
+  if (!normalized) return null;
+
+  return store.listPassports({ status: "draft", limit: 100 })
+    .find((passport) => normalizedProductUrl(passport.productUrl) === normalized) || null;
+}
+
 async function handlePassportApi({ method, pathname, body = {}, searchParams, store }) {
   const parts = splitPath(pathname);
 
@@ -74,6 +90,16 @@ async function handlePassportApi({ method, pathname, body = {}, searchParams, st
   }
 
   if (method === "POST" && pathname === "/api/passports") {
+    const existingDraft = findExistingDraft(store, body.productUrl);
+    if (existingDraft && body.allowDuplicate !== true) {
+      return jsonResponse(409, {
+        error: "A draft already exists for this product URL. Choose analysis-only or explicitly save another draft.",
+        code: "duplicate_draft",
+        existingDraft: toApiPassport(existingDraft),
+        links: linksForPassport(existingDraft),
+      });
+    }
+
     const passport = await createPassport({
       productUrl: body.productUrl,
       store,
@@ -170,6 +196,7 @@ async function safeHandlePassportApi(options) {
 }
 
 module.exports = {
+  findExistingDraft,
   handlePassportApi,
   jsonResponse,
   safeHandlePassportApi,

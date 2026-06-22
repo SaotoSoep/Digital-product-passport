@@ -60,7 +60,7 @@ function isPrivateIp(address) {
   return true;
 }
 
-async function validatePublicUrl(rawUrl) {
+async function validatePublicUrl(rawUrl, lookup = dns.lookup) {
   let parsed;
   try {
     parsed = new URL(rawUrl);
@@ -82,7 +82,7 @@ async function validatePublicUrl(rawUrl) {
   }
 
   try {
-    const addresses = await dns.lookup(hostname, { all: true, verbatim: false });
+    const addresses = await lookup(hostname, { all: true, verbatim: false });
     if (addresses.some((item) => isPrivateIp(item.address))) {
       return { ok: false, reason: "private_url_blocked" };
     }
@@ -243,9 +243,11 @@ const server = http.createServer(async (request, response) => {
   sendJson(response, responsePayload.status === "failed" ? 200 : 200, responsePayload);
 });
 
-server.listen(port, () => {
-  console.log(`deep-reader-worker listening on :${port}`);
-});
+if (require.main === module) {
+  server.listen(port, () => {
+    console.log(`deep-reader-worker listening on :${port}`);
+  });
+}
 
 module.exports = {
   failureReasonFor,
