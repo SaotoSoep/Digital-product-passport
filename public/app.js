@@ -5,8 +5,8 @@ const statusBox = document.getElementById("status");
 const stageList = document.getElementById("stage-list");
 const reportPanel = document.getElementById("report");
 const reportHeader = document.getElementById("report-header");
-const reportOverview = document.getElementById("report-overview");
-const consumerReportPanel = document.getElementById("report-panel-report");
+const overviewReportPanel = document.getElementById("report-panel-overview");
+const evidenceReportPanel = document.getElementById("report-panel-evidence");
 const technicalReportPanel = document.getElementById("report-panel-technical");
 const tabButtons = Array.from(document.querySelectorAll(".tab-button"));
 const exampleButtons = Array.from(document.querySelectorAll("[data-example-url]"));
@@ -124,7 +124,7 @@ const dppFieldDescriptions = {
 };
 
 let currentModel = null;
-let activeTab = "report";
+let activeTab = "overview";
 let pendingDuplicate = null;
 
 function escapeHtml(value) {
@@ -1068,77 +1068,107 @@ function brandSourceLinkLabel(source) {
 }
 
 function renderReportHeader(model) {
-  const verdict = buildVerdict(model);
-  const createdAt = formatDateTime(model.storedPassport?.createdAt || model.generatedAt);
-  const passportId = known(model.storedPassport?.id);
-  const status = known(model.storedPassport?.status) || (model.responseLinks.self ? "draft" : "analysis only");
+  reportHeader.innerHTML = ProductPassportDashboard.renderDashboardHeader(model);
+}
 
-  reportHeader.innerHTML = `
-    <div>
-      <p class="section-kicker">Independent report · ${escapeHtml(model.retailer)}</p>
-      <h2>${escapeHtml(model.productName)}</h2>
-      <p>${escapeHtml(model.brand)}</p>
-    </div>
-    <div class="result-meta">
-      <span class="verdict-pill ${verdict.tone}">${escapeHtml(verdict.label)}</span>
-      ${statusBadge(model.extractionStatus)}
-      ${passportId ? `<span>Analysis ${escapeHtml(passportId)}</span>` : ""}
-      ${createdAt ? `<span>${escapeHtml(createdAt)}</span>` : ""}
-      <span>${escapeHtml(passportStatusLabel(status))}</span>
-    </div>
+function renderModuleFieldBlocks(rows) {
+  return rows.map(({ title, field, emptyText }) => renderFieldBlock(title, field, emptyText)).join("");
+}
+
+function renderModuleEmpty(title, description) {
+  return `
+    <article class="empty-row">
+      <h3>${escapeHtml(title)}</h3>
+      <p>${escapeHtml(description)}</p>
+    </article>
   `;
 }
 
-function renderReportOverview(model) {
-  const verdict = buildVerdict(model);
-  const displayedClaims = consumerClaims(model);
+function renderClaimEvidenceRows(model) {
+  const displayedClaims = model.claimCitations.length > 0 ? model.claimCitations : model.claims;
 
-  reportOverview.innerHTML = `
-    <div class="verdict-card ${verdict.tone}">
-      <span class="mini-label">Independent read</span>
-      <h3>${escapeHtml(verdict.label)}</h3>
-      <p>${escapeHtml(cleanReadableText(verdict.summary))}</p>
-    </div>
+  return displayedClaims.length > 0
+    ? displayedClaims.map((claim) => renderClaimItem(claim, model.evidenceRecordIndex)).join("")
+    : renderModuleEmpty("No claim rows", "The analyzer did not return structured claim evidence for this product.");
+}
 
-    <div class="score-card glance-card">
-      <div class="score-topline">
-        <span>Known</span>
-        <strong>${model.foundCount}/${model.checkedCount}</strong>
-      </div>
-      <p>Checked product fields supported by available evidence.</p>
-    </div>
+function renderModuleShell(kind, bodyByKey) {
+  const modules = ProductPassportDashboard.passportModuleDefinitions(kind).map((module) => ({
+    ...module,
+    body: typeof bodyByKey[module.key] === "object"
+      ? bodyByKey[module.key].body
+      : bodyByKey[module.key] || renderModuleEmpty(`${module.label} details unavailable`, "No details were returned for this passport module."),
+    layout: typeof bodyByKey[module.key] === "object" ? bodyByKey[module.key].layout : "",
+  }));
 
-    <div class="score-card glance-card">
-      <div class="score-topline">
-        <span>Claims</span>
-        <strong>${displayedClaims.length || model.claimValues.length}</strong>
-      </div>
-      <p>Claim rows found for evidence review.</p>
-    </div>
+  return ProductPassportDashboard.renderPassportModuleShell({
+    ariaLabel: `Product passport ${kind} modules`,
+    modules,
+  });
+}
 
-    <div class="score-card glance-card missing-glance">
-      <div class="score-topline">
-        <span>Missing</span>
-        <strong>${model.missingCount}</strong>
-      </div>
-      <p>Checked on available content, but not found.</p>
-    </div>
-
-    <div class="score-card glance-card unavailable-glance">
-      <div class="score-topline">
-        <span>Unavailable</span>
-        <strong>${model.unavailableCount}</strong>
-      </div>
-      <p>Could not be determined because source content was unavailable.</p>
-    </div>
-
-    <dl class="passport-facts">
-      <div>
-        <dt>Product source</dt>
-        <dd><a href="${escapeHtml(model.submittedUrl)}" target="_blank" rel="noreferrer">${escapeHtml(model.submittedUrl)}</a></dd>
-      </div>
-    </dl>
-  `;
+function renderEvidenceReport(model) {
+  return renderModuleShell("evidence", {
+    summary: `
+      <article class="passport-section">
+        <div class="passport-section-heading">
+          <div>
+            <p class="mini-label">Evidence</p>
+            <h4>Grouped source trail</h4>
+          </div>
+        </div>
+        <p>Grouped sources, confidence, verification status, URLs, and excerpts used by this report.</p>
+      </article>
+      ${ProductPassportDashboard.renderDashboardSources(model)}
+    `,
+    keyFacts: {
+      body: renderModuleFieldBlocks([
+        { title: "Product name", field: model.fields.productName, emptyText: "Product name was not returned." },
+        { title: "Brand", field: model.fields.brand, emptyText: "Brand was not returned." },
+        { title: "Product identifiers", field: model.fields.productIdentifiers, emptyText: "No product identifiers were found." },
+        { title: "Color/variant", field: model.fields.colorVariant, emptyText: "No color or variant was found." },
+        { title: "Product description", field: model.fields.productDescription, emptyText: "No product description was returned." },
+      ]),
+      layout: "card-grid",
+    },
+    material: {
+      body: renderModuleFieldBlocks([
+        { title: "Material composition", field: model.fields.materialComposition, emptyText: "Material composition was not found in the normalized page evidence." },
+        { title: "Certifications or standards", field: model.fields.certifications, emptyText: "No certification, standard, or third-party reference was found in the normalized page evidence." },
+      ]),
+      layout: "card-grid",
+    },
+    claims: `
+      ${renderClaimEvidenceRows(model)}
+      ${renderModuleFieldBlocks([
+        { title: "Sustainability claim on product page", field: model.fields.sustainabilityClaims, emptyText: "No sustainability claim was found in the normalized page evidence." },
+        { title: "Certification or standard", field: model.fields.certifications, emptyText: "No certification, standard, or third-party reference was found in the normalized page evidence." },
+      ])}
+    `,
+    traceability: {
+      body: renderModuleFieldBlocks([
+        { title: "Origin and manufacturing", field: model.fields.productionOrigin, emptyText: "Country, factory, supplier, or traceability detail was not found in the normalized page evidence." },
+        { title: "Supplier and factory details", field: model.fields.supplierDetails, emptyText: "Supplier, factory, country, address, or employee count was not found in the normalized page evidence." },
+      ]),
+      layout: "card-grid",
+    },
+    care: {
+      body: renderModuleFieldBlocks([
+        { title: "Care instructions", field: model.fields.careText, emptyText: "Care instructions were not found in the normalized page evidence." },
+        { title: "Durability, repair, or warranty", field: model.fields.durabilityClaims, emptyText: "No direct claim about longevity, repair, wear, warranty, or test results was found on the product page." },
+      ]),
+      layout: "card-grid",
+    },
+    missing: `
+      ${ProductPassportDashboard.renderEvidenceCoverage(model)}
+      ${renderConsumerUnknowns(model)}
+      ${renderTechnicalDisclosure(
+        "All normalized field evidence",
+        "Every checked field and citation remains available.",
+        renderRawEvidence(model)
+      )}
+    `,
+  });
 }
 
 function renderOverviewTab(model) {
@@ -1664,12 +1694,17 @@ function renderTechnicalReport(model) {
     </dl>
   `;
 
-  return `
-    <div class="technical-report">
-      <div class="technical-intro">
-        <h3>Technical details</h3>
+  return renderModuleShell("technical", {
+    summary: `
+      <article class="passport-section">
+        <div class="passport-section-heading">
+          <div>
+            <p class="mini-label">Technical details</p>
+            <h4>Capture and report metadata</h4>
+          </div>
+        </div>
         <p>Diagnostics, normalized evidence, and report-readiness internals are preserved here for deeper review.</p>
-      </div>
+      </article>
       ${renderTechnicalDisclosure(
         "Evidence capture and access",
         "Deep-reader status, user-provided evidence, and access diagnostics.",
@@ -1677,27 +1712,194 @@ function renderTechnicalReport(model) {
         Boolean(model.accessDiagnostics)
       )}
       ${renderTechnicalDisclosure(
-        "Passport-readiness internals",
-        "Field mapping for future passport workflows; this is not official DPP readiness.",
-        renderPassportReadiness(model)
+        "Report metadata",
+        "Source and saved-analysis identifiers.",
+        metadata
       )}
+    `,
+    keyFacts: {
+      body: `
+        ${renderTechnicalDisclosure(
+          "Passport-readiness internals",
+          "Field mapping for future passport workflows; this is not official DPP readiness.",
+          renderPassportReadiness(model),
+          true
+        )}
+        ${renderEvidenceChecklist(model)}
+        ${renderModuleFieldBlocks([
+          { title: "Product name", field: model.fields.productName, emptyText: "Product name was not returned." },
+          { title: "Brand", field: model.fields.brand, emptyText: "Brand was not returned." },
+          { title: "Product identifiers", field: model.fields.productIdentifiers, emptyText: "No product identifiers were found." },
+          { title: "Color/variant", field: model.fields.colorVariant, emptyText: "No color or variant was found." },
+          { title: "Product description", field: model.fields.productDescription, emptyText: "No product description was returned." },
+        ])}
+      `,
+      layout: "card-grid",
+    },
+    material: {
+      body: renderModuleFieldBlocks([
+        { title: "Material composition", field: model.fields.materialComposition, emptyText: "Material composition was not returned." },
+        { title: "Certifications", field: model.fields.certifications, emptyText: "Certifications were not returned." },
+      ]),
+      layout: "card-grid",
+    },
+    claims: `
+      <div class="score-grid">
+        ${renderScore("Claim-evidence strength", model.claimScore)}
+      </div>
+      ${renderClaimEvidenceRows(model)}
+      ${renderModuleFieldBlocks([
+        { title: "Sustainability claims", field: model.fields.sustainabilityClaims, emptyText: "Sustainability claims were not returned." },
+        { title: "Certifications", field: model.fields.certifications, emptyText: "Certifications were not returned." },
+      ])}
+    `,
+    traceability: {
+      body: renderModuleFieldBlocks([
+        { title: "Origin and manufacturing", field: model.fields.productionOrigin, emptyText: "Origin/manufacturing was not returned." },
+        { title: "Supplier and factory details", field: model.fields.supplierDetails, emptyText: "Supplier/factory details were not returned." },
+      ]),
+      layout: "card-grid",
+    },
+    care: {
+      body: renderModuleFieldBlocks([
+        { title: "Care instructions", field: model.fields.careText, emptyText: "Care instructions were not returned." },
+        { title: "Durability, repair, or warranty", field: model.fields.durabilityClaims, emptyText: "Durability, repair, or warranty details were not returned." },
+      ]),
+      layout: "card-grid",
+    },
+    missing: `
       ${renderTechnicalDisclosure(
         "Raw normalized evidence",
         "Every checked product field and its citations remain accessible.",
-        renderRawEvidence(model)
+        renderRawEvidence(model),
+        true
       )}
       ${renderTechnicalDisclosure(
         "Brand context",
         "Public brand pages kept separate from product-level evidence.",
         renderBrandTab(model)
       )}
-      ${renderTechnicalDisclosure(
-        "Report metadata",
-        "Source and saved-analysis identifiers.",
-        metadata
-      )}
-    </div>
-  `;
+    `,
+  });
+}
+
+let passportModuleNavFrame = 0;
+let passportModuleNavLockedUntil = 0;
+
+function activeReportPanel() {
+  if (activeTab === "evidence") {
+    return evidenceReportPanel;
+  }
+
+  if (activeTab === "technical") {
+    return technicalReportPanel;
+  }
+
+  return overviewReportPanel;
+}
+
+function keepPassportModuleLinkVisible(link) {
+  const nav = link.closest(".passport-side-nav");
+  if (!nav || nav.scrollWidth <= nav.clientWidth) {
+    return;
+  }
+
+  const navRect = nav.getBoundingClientRect();
+  const linkRect = link.getBoundingClientRect();
+  const targetLeft = nav.scrollLeft
+    + linkRect.left
+    - navRect.left
+    - (nav.clientWidth - linkRect.width) / 2;
+
+  nav.scrollTo({
+    left: Math.max(0, targetLeft),
+    behavior: "smooth",
+  });
+}
+
+function passportModulePairs() {
+  const panel = activeReportPanel();
+  if (!panel || panel.hidden) {
+    return [];
+  }
+
+  return Array.from(panel.querySelectorAll(".passport-side-nav a[href^='#']"))
+    .map((link) => {
+      const id = decodeURIComponent(link.getAttribute("href").slice(1));
+      return {
+        id,
+        link,
+        target: document.getElementById(id),
+      };
+    })
+    .filter((item) => item.target);
+}
+
+function setActivePassportModule(targetId, options = {}) {
+  const pairs = passportModulePairs();
+
+  for (const { id, link } of pairs) {
+    const selected = id === targetId;
+    link.classList.toggle("is-active", selected);
+    if (selected) {
+      link.setAttribute("aria-current", "location");
+      if (options.keepVisible) {
+        keepPassportModuleLinkVisible(link);
+      }
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  }
+}
+
+function syncPassportModuleNav() {
+  passportModuleNavFrame = 0;
+
+  const panel = activeReportPanel();
+  if (!currentModel || !panel || panel.hidden) {
+    return;
+  }
+
+  const pairs = passportModulePairs();
+  if (pairs.length === 0) {
+    return;
+  }
+
+  if (Date.now() < passportModuleNavLockedUntil) {
+    return;
+  }
+
+  const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+  if (window.scrollY >= maxScroll - 4) {
+    setActivePassportModule(pairs[pairs.length - 1].id, { keepVisible: true });
+    return;
+  }
+
+  const anchorLine = Math.min(window.innerHeight * 0.2, 180);
+  let active = pairs[0];
+  let activeTop = Number.NEGATIVE_INFINITY;
+
+  for (const pair of pairs) {
+    const top = pair.target.getBoundingClientRect().top;
+    if (top > anchorLine) {
+      break;
+    }
+
+    if (top > activeTop + 8) {
+      active = pair;
+      activeTop = top;
+    }
+  }
+
+  setActivePassportModule(active.id, { keepVisible: true });
+}
+
+function requestPassportModuleNavSync() {
+  if (passportModuleNavFrame) {
+    return;
+  }
+
+  passportModuleNavFrame = window.requestAnimationFrame(syncPassportModuleNav);
 }
 
 function renderActiveTab() {
@@ -1711,20 +1913,24 @@ function renderActiveTab() {
     tabButton.setAttribute("aria-selected", String(selected));
     tabButton.setAttribute("tabindex", selected ? "0" : "-1");
   });
-  consumerReportPanel.hidden = activeTab !== "report";
+  overviewReportPanel.hidden = activeTab !== "overview";
+  evidenceReportPanel.hidden = activeTab !== "evidence";
   technicalReportPanel.hidden = activeTab !== "technical";
+
+  requestPassportModuleNavSync();
 }
 
 function renderReport(response, submittedUrl) {
   currentModel = extractModel(response, submittedUrl);
-  activeTab = "report";
+  activeTab = "overview";
   renderReportHeader(currentModel);
-  renderReportOverview(currentModel);
-  consumerReportPanel.innerHTML = renderConsumerReport(currentModel);
+  overviewReportPanel.innerHTML = ProductPassportDashboard.renderDashboard(currentModel);
+  evidenceReportPanel.innerHTML = renderEvidenceReport(currentModel);
   technicalReportPanel.innerHTML = renderTechnicalReport(currentModel);
   renderActiveTab();
   reportPanel.classList.remove("hidden");
   renderRecoveryState(currentModel);
+  requestPassportModuleNavSync();
 }
 
 function renderRecoveryState(model) {
@@ -1755,28 +1961,25 @@ function renderError(error, submittedUrl) {
       <span class="verdict-pill risk">Needs retry</span>
     </div>
   `;
-  reportOverview.innerHTML = `
-    <div class="verdict-card risk">
-      <span class="mini-label">Independent read</span>
-      <h3>No reliable result</h3>
-      <p>${escapeHtml(error.message || "Unable to analyze this URL.")}</p>
-    </div>
-  `;
-  consumerReportPanel.innerHTML = `
+  overviewReportPanel.innerHTML = `
     <article class="empty-row">
-      <h3>No fallback report was generated</h3>
+      <span class="mini-label">No reliable result</span>
+      <h3>No fallback passport was generated</h3>
+      <p>${escapeHtml(error.message || "Unable to analyze this URL.")}</p>
       <p>This report only shows extracted or returned evidence. It does not fill the report with sample product data when the live read fails.</p>
     </article>
   `;
+  evidenceReportPanel.innerHTML = "";
   technicalReportPanel.innerHTML = "";
-  activeTab = "report";
+  activeTab = "overview";
   tabButtons.forEach((tabButton) => {
     const selected = tabButton.dataset.tab === activeTab;
     tabButton.classList.toggle("active", selected);
     tabButton.setAttribute("aria-selected", String(selected));
     tabButton.setAttribute("tabindex", selected ? "0" : "-1");
   });
-  consumerReportPanel.hidden = false;
+  overviewReportPanel.hidden = false;
+  evidenceReportPanel.hidden = true;
   technicalReportPanel.hidden = true;
   reportPanel.classList.remove("hidden");
 }
@@ -1790,17 +1993,43 @@ class ApiRequestError extends Error {
   }
 }
 
+function isNetworkRequestError(error) {
+  return error instanceof TypeError &&
+    /failed to fetch|networkerror|load failed/i.test(error.message || "");
+}
+
+function analysisServiceUnavailableError(error) {
+  return new ApiRequestError(
+    "Could not reach the analysis service. Check that the local server is running and retry.",
+    0,
+    {
+      code: "analysis_service_unreachable",
+      cause: error.message || "Network request failed",
+    }
+  );
+}
+
 async function analyzeProduct(productUrl, userProvidedEvidence = null) {
-  const response = await fetch("/api/analyze", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      productUrl,
-      ...(userProvidedEvidence ? { userProvidedEvidence } : {}),
-    }),
-  });
+  let response;
+
+  try {
+    response = await fetch("/api/analyze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        productUrl,
+        ...(userProvidedEvidence ? { userProvidedEvidence } : {}),
+      }),
+    });
+  } catch (error) {
+    if (isNetworkRequestError(error)) {
+      throw analysisServiceUnavailableError(error);
+    }
+
+    throw error;
+  }
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
@@ -1810,24 +2039,43 @@ async function analyzeProduct(productUrl, userProvidedEvidence = null) {
   return response.json();
 }
 
+async function fallbackToAnalysisOnly(productUrl, reason) {
+  const analysis = await analyzeProduct(productUrl);
+  return {
+    ...analysis,
+    fallbackMode: "analysis-only",
+    fallbackReason: reason,
+  };
+}
+
 async function createProductPassport(productUrl, options = {}) {
-  const response = await fetch("/api/passports", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      productUrl,
-      allowDuplicate: options.allowDuplicate === true,
-    }),
-  });
+  let response;
+
+  try {
+    response = await fetch("/api/passports", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        productUrl,
+        allowDuplicate: options.allowDuplicate === true,
+      }),
+    });
+  } catch (error) {
+    if (isNetworkRequestError(error)) {
+      return fallbackToAnalysisOnly(productUrl, "draft-service-unreachable");
+    }
+
+    throw error;
+  }
 
   if (response.status === 404 || response.status === 405) {
-    const analysis = await analyzeProduct(productUrl);
-    return {
-      ...analysis,
-      fallbackMode: "analysis-only",
-    };
+    return fallbackToAnalysisOnly(productUrl, "draft-service-unavailable");
+  }
+
+  if (response.status >= 500) {
+    return fallbackToAnalysisOnly(productUrl, `draft-service-${response.status}`);
   }
 
   if (!response.ok) {
@@ -1909,6 +2157,25 @@ tabButtons.forEach((tabButton) => {
     tabButtons[nextIndex].focus();
   });
 });
+
+document.addEventListener("click", (event) => {
+  const link = event.target.closest?.(".passport-side-nav a[href^='#']");
+  if (!link) {
+    return;
+  }
+
+  const id = decodeURIComponent(link.getAttribute("href").slice(1));
+  const target = document.getElementById(id);
+  if (target) {
+    event.preventDefault();
+    passportModuleNavLockedUntil = Date.now() + 800;
+    setActivePassportModule(id, { keepVisible: true });
+    target.scrollIntoView({ block: "start", inline: "nearest" });
+  }
+});
+
+document.addEventListener("scroll", requestPassportModuleNavSync, { passive: true });
+window.addEventListener("resize", requestPassportModuleNavSync);
 
 document.addEventListener("keydown", (event) => {
   const summary = event.target.closest?.("summary");
