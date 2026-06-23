@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Product Passport Agent</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/dashboard.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
@@ -104,57 +105,73 @@
           </section>
         </section>
 
-        <section id="report" class="report-shell hidden" aria-label="Independent product report">
+        <section id="report" class="report-shell hidden" aria-label="Product passport report">
           <div id="report-header" class="report-header"></div>
 
-          <div class="report-layout">
-            <aside id="report-overview" class="score-panel"></aside>
-
-            <section class="report-detail">
-              <div class="tabbar" role="tablist" aria-label="Report sections">
-                <button
-                  id="report-tab-report"
-                  class="tab-button active"
-                  type="button"
-                  role="tab"
-                  aria-selected="true"
-                  aria-controls="report-panel-report"
-                  tabindex="0"
-                  data-tab="report"
-                >
-                  Consumer report
-                </button>
-                <button
-                  id="report-tab-technical"
-                  class="tab-button"
-                  type="button"
-                  role="tab"
-                  aria-selected="false"
-                  aria-controls="report-panel-technical"
-                  tabindex="-1"
-                  data-tab="technical"
-                >
-                  Technical details
-                </button>
-              </div>
-
-              <div
-                id="report-panel-report"
-                class="report-body"
-                role="tabpanel"
-                aria-labelledby="report-tab-report"
+          <section class="report-detail">
+            <div class="tabbar" role="tablist" aria-label="Passport sections">
+              <button
+                id="report-tab-overview"
+                class="tab-button active"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="report-panel-overview"
                 tabindex="0"
-              ></div>
-              <div
-                id="report-panel-technical"
-                class="report-body"
-                role="tabpanel"
-                aria-labelledby="report-tab-technical"
-                tabindex="0"
-                hidden
-              ></div>
-            </section>
-          </div>
+                data-tab="overview"
+              >
+                Overview
+              </button>
+              <button
+                id="report-tab-evidence"
+                class="tab-button"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="report-panel-evidence"
+                tabindex="-1"
+                data-tab="evidence"
+              >
+                Evidence
+              </button>
+              <button
+                id="report-tab-technical"
+                class="tab-button"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="report-panel-technical"
+                tabindex="-1"
+                data-tab="technical"
+              >
+                Technical
+              </button>
+            </div>
+
+            <div
+              id="report-panel-overview"
+              class="report-body"
+              role="tabpanel"
+              aria-labelledby="report-tab-overview"
+              tabindex="0"
+            ></div>
+            <div
+              id="report-panel-evidence"
+              class="report-body"
+              role="tabpanel"
+              aria-labelledby="report-tab-evidence"
+              tabindex="0"
+              hidden
+            ></div>
+            <div
+              id="report-panel-technical"
+              class="report-body"
+              role="tabpanel"
+              aria-labelledby="report-tab-technical"
+              tabindex="0"
+              hidden
+            ></div>
+          </section>
         </section>
       </main>
     </div>
