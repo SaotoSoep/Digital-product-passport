@@ -78,3 +78,11 @@ test("falls back to analysis-only when draft saving is unavailable", () => {
   assert.match(app, /response\.status >= 500/);
   assert.match(app, /draft-service-unreachable/);
 });
+
+test("renders claim verification status from deterministic claimVerifications", () => {
+  assert.match(app, /claimVerifications/);
+  assert.match(app, /claim\.claimText/);
+  assert.match(app, /Evidence:<\/strong>.*displayMachineStatus\(evidenceStatus\)/);
+  assert.match(app, /Verification:<\/strong>.*displayMachineStatus\(verificationStatus\)/);
+  assert.match(app, /model\.claimVerifications\.length > 0/);
+});
