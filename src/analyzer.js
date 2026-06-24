@@ -19,6 +19,10 @@ const {
   mergeUserProvidedEvidence,
   refreshEvidenceSummary,
 } = require("./lib/product-passport/evidence");
+const {
+  buildClaimVerifications,
+  toLegacySustainabilityClaim,
+} = require("./lib/product-passport/claim-verification");
 const { buildPassportReadiness } = require("./lib/product-passport/readiness");
 const { scoreProductPassport } = require("./lib/product-passport/scorer");
 
@@ -1711,6 +1715,7 @@ function withProductPageEvidence(
   buildCanonicalEvidenceLedger(checkedProductPageEvidence);
   const alignedReport = alignReportWithCanonicalEvidence(report, checkedProductPageEvidence);
   const claimCitations = buildCanonicalClaims(alignedReport, checkedProductPageEvidence);
+  const claimVerifications = buildClaimVerifications(alignedReport, checkedProductPageEvidence);
   const deterministicScores = scoresMeetingMinimumEvidence(checkedProductPageEvidence);
   const deepReadNote = deepReadShouldMakeMissingUnavailable(deepPageReadEvidence)
     ? deepReadBlockedNote()
@@ -1725,6 +1730,7 @@ function withProductPageEvidence(
 
   return {
     ...alignedReport,
+    sustainabilityClaimsFound: claimVerifications.map(toLegacySustainabilityClaim),
     deepPageReadEvidence: deepPageReadEvidence
       ? { ...deepPageReadEvidence, mode: deepPageReadEvidence.mode || deepReadMode, note: deepPageReadEvidence.note || deepReadNote }
       : deepPageReadEvidence,
@@ -1740,6 +1746,7 @@ function withProductPageEvidence(
     productPageEvidence: checkedProductPageEvidence,
     evidenceLedger: checkedProductPageEvidence.evidenceLedger,
     claimCitations,
+    claimVerifications,
     passportReadiness: buildPassportReadiness(checkedProductPageEvidence, productPageSnapshot),
     ...deterministicScores,
   };

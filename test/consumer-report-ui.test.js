@@ -66,3 +66,11 @@ test("does not use Sustainable as a product verdict", () => {
   assert.doesNotMatch(app, /Draft passport saved/);
   assert.doesNotMatch(app, /Save draft passport/);
 });
+
+test("renders claim verification status from deterministic claimVerifications", () => {
+  assert.match(app, /claimVerifications/);
+  assert.match(app, /claim\.claimText/);
+  assert.match(app, /Evidence:<\/strong>.*displayMachineStatus\(evidenceStatus\)/);
+  assert.match(app, /Verification:<\/strong>.*displayMachineStatus\(verificationStatus\)/);
+  assert.match(app, /model\.claimVerifications\.length > 0/);
+});

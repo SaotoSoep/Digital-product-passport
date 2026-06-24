@@ -179,6 +179,9 @@ function evidenceSourceLabel(source) {
     product_page_deep_read: "Product page deep read",
     product_page_basic_extraction: "Product page basic extraction",
     user_provided_evidence: "User-provided evidence",
+    "product-page": "Product page",
+    "brand-page": "Brand page",
+    "external-source": "External source",
     brand_page: "Brand page",
     public_database: "Public database",
     agent_interpretation: "Agent interpretation",
@@ -573,6 +576,9 @@ function extractModel(response, submittedUrl) {
     : Array.isArray(report.claims)
       ? report.claims
       : [];
+  const claimVerifications = Array.isArray(report.claimVerifications)
+    ? report.claimVerifications
+    : [];
   const unknowns = Array.isArray(report.unknowns)
     ? report.unknowns
     : Array.isArray(report.missingInformation)
@@ -637,6 +643,7 @@ function extractModel(response, submittedUrl) {
     certifications,
     durabilityClaims,
     claims,
+    claimVerifications,
     claimCitations: Array.isArray(report.claimCitations) ? report.claimCitations : [],
     claimValues,
     fallbackClaims,
@@ -758,7 +765,10 @@ function renderUserProvidedEvidence(model) {
 }
 
 function buildVerdict(model) {
-  const hasClaims = model.claimValues.length > 0 || model.fallbackClaims.length > 0 || model.claims.length > 0;
+  const hasClaims = model.claimVerifications.length > 0 ||
+    model.claimValues.length > 0 ||
+    model.fallbackClaims.length > 0 ||
+    model.claims.length > 0;
   const extractionFailed = model.extractionStatus === "failed";
 
   if (extractionFailed) {
@@ -1015,10 +1025,11 @@ function renderPassportReadiness(model) {
 }
 
 function renderClaimItem(claim, evidenceRecordIndex = new Map()) {
-  const claimText = known(claim.originalWording) || known(claim.brandClaim) || known(claim.claim) || "Claim text not found";
-  const confidence = known(claim.confidenceDimension) || known(claim.confidence) || "medium";
+  const claimText = known(claim.claimText) || known(claim.originalWording) || known(claim.brandClaim) || known(claim.claim) || "Claim text not found";
+  const confidence = known(claim.extractionConfidence) || known(claim.confidenceDimension) || known(claim.confidence) || "medium";
   const type = known(claim.sourceType) || known(claim.type);
   const verificationStatus = String(claim.verificationStatus || "interpretation").trim();
+  const evidenceStatus = known(claim.evidenceStatus);
   const whyItMatters = known(claim.note) || known(claim.whyItMatters);
   const records = (claim.evidenceIds || []).map((id) => evidenceRecordIndex.get(id)).filter(Boolean);
 
@@ -1028,8 +1039,9 @@ function renderClaimItem(claim, evidenceRecordIndex = new Map()) {
         <h3>${escapeHtml(cleanReadableText(claimText))}</h3>
         <span class="confidence-badge">${escapeHtml(displayText(confidence))}</span>
       </div>
-      ${claim.category ? `<p><strong>Category:</strong> ${escapeHtml(cleanReadableText(claim.category))}</p>` : ""}
+      ${claim.claimCategory || claim.category ? `<p><strong>Category:</strong> ${escapeHtml(displayMachineStatus(claim.claimCategory || claim.category))}</p>` : ""}
       ${type ? `<p><strong>Source type:</strong> ${escapeHtml(evidenceSourceLabel(type))}</p>` : ""}
+      ${evidenceStatus ? `<p><strong>Evidence:</strong> ${escapeHtml(displayMachineStatus(evidenceStatus))}</p>` : ""}
       <p><strong>Verification:</strong> ${escapeHtml(displayMachineStatus(verificationStatus))}</p>
       ${renderCitations(records)}
       ${whyItMatters ? `<p class="muted">${escapeHtml(cleanReadableText(whyItMatters))}</p>` : ""}
@@ -1177,7 +1189,11 @@ function renderOverviewTab(model) {
 }
 
 function renderClaimsTab(model) {
-  const displayedClaims = model.claimCitations.length > 0 ? model.claimCitations : model.claims;
+  const displayedClaims = model.claimVerifications.length > 0
+    ? model.claimVerifications
+    : model.claimCitations.length > 0
+      ? model.claimCitations
+      : model.claims;
   const claimStrengthSummary = model.claimScore.status === "not_available"
     ? "Not available"
     : `${Number(model.claimScore.score)}/100`;
@@ -1375,7 +1391,7 @@ function renderConsumerClaims(model) {
   const structuredClaims = displayedClaims.length > 0
     ? displayedClaims.map((claim) => renderClaimItem(claim, model.evidenceRecordIndex)).join("")
     : "";
-  const claimValues = model.claimValues.length > 0
+  const claimValues = model.claimValues.length > 0 && structuredClaims.length === 0
     ? `<article class="claim-row">
         <div class="row-header"><h4>Claim wording found on the product page</h4>${statusBadge("found")}</div>
         <ul class="plain-list">${model.claimValues.map((claim) => `<li>${escapeHtml(claim)}</li>`).join("")}</ul>
@@ -1393,6 +1409,10 @@ function renderConsumerClaims(model) {
 }
 
 function consumerClaims(model) {
+  if (model.claimVerifications.length > 0) {
+    return model.claimVerifications;
+  }
+
   const candidates = model.claimCitations.length > 0 ? model.claimCitations : model.claims;
   const claimCategories = new Set([
     "sustainability",
