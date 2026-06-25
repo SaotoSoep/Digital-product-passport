@@ -341,7 +341,10 @@ test("claim evidence ladder separates wording, product support, and independent 
   assert.match(rendered, /Independent product-linked verification found/);
   assert.match(rendered, /The disclosed composition supports material wording in the claim/);
   assert.match(rendered, /No independent product-linked verification was found/);
-  assert.match(rendered, /Brand statement/);
+  assert.match(rendered, /Claim source/);
+  assert.match(rendered, /Brand\/retailer wording/);
+  assert.match(rendered, /Evidence assessment/);
+  assert.match(rendered, /Brand wording only; not independently supported/);
   assert.doesNotMatch(rendered, /independently verified/i);
 });
 
@@ -360,13 +363,11 @@ test("claim module prefers deterministic claim verification statuses", () => {
   }));
 
   assert.match(rendered, /Contains 78% organic cotton/);
-  assert.match(rendered, /Product page/);
-  assert.match(rendered, /Evidence status/);
-  assert.match(rendered, /present/);
-  assert.match(rendered, /Verification status/);
-  assert.match(rendered, /verified/);
-  assert.match(rendered, /Extraction confidence/);
-  assert.match(rendered, /high/);
+  assert.match(rendered, /Claim source/);
+  assert.match(rendered, /Brand\/retailer wording/);
+  assert.match(rendered, /Evidence assessment/);
+  assert.match(rendered, /Supported by product-specific evidence/);
+  assert.doesNotMatch(rendered, /Extraction confidence/);
   assert.match(rendered, /The disclosed composition supports material wording in the claim|Product-specific evidence directly supports the claim/);
   assert.match(rendered, /dashboard-ladder-step is-found[\s\S]*Product-specific support found/);
   assert.doesNotMatch(rendered, /brand statement only/);

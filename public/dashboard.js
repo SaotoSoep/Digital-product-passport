@@ -177,6 +177,43 @@
     return SOURCE_LABELS[source] || displayMachineStatus(source || "Source");
   }
 
+  function claimSourceLabel(source) {
+    const labels = {
+      brand_statement: "Brand/retailer wording",
+      public_page_evidence: "Product-page evidence",
+      external_evidence: "External verification source",
+      user_provided_evidence: "User provided evidence",
+      "product-page": "Product page",
+      "brand-page": "Brand page",
+      "external-source": "External verification source",
+    };
+
+    return labels[source] || sourceLabel(source);
+  }
+
+  function claimEvidenceAssessmentLabel(status) {
+    const labels = {
+      verified: "Supported by product-specific evidence",
+      "partially-supported": "Partially supported by product evidence",
+      unverified: "No supporting product evidence found",
+      unavailable: "Evidence unavailable",
+      brand_statement_only: "Brand wording only; not independently supported",
+      independently_verified: "Independently verified",
+      user_provided: "User provided; not independently verified",
+      not_verified: "Not verified",
+    };
+
+    return labels[status] || displayMachineStatus(status || "Not verified");
+  }
+
+  function claimWordingSource(claim, records) {
+    const wordingRecord = records.find((record) =>
+      ["sustainabilityClaims", "certifications", "durabilityClaims"].includes(record?.fieldKey)
+    );
+
+    return wordingRecord?.sourceType || records[0]?.sourceType || claim?.sourceType || claim?.type;
+  }
+
   function isValidUrl(value) {
     try {
       const url = new URL(value);
@@ -910,10 +947,10 @@
             const userProvided = records.some((record) => record.sourceType === "user_provided_evidence") || claim?.sourceType === "user_provided_evidence";
             const verificationStatus = displayMachineStatus(claim?.verificationStatus || (userProvided ? "user_provided" : "not_verified"));
             const evidenceStatus = cleanText(claim?.evidenceStatus);
-            const confidence = cleanText(claim?.extractionConfidence || claim?.confidenceDimension || claim?.confidence || records[0]?.extractionConfidence || "not supplied");
             const claimHasProductSupport = evidenceStatus === "present" &&
               ["verified", "partially-supported"].includes(claim?.verificationStatus);
             const productSupportFound = hasProductSupport || claimHasProductSupport;
+            const claimSource = claimWordingSource(claim, records);
             const productSupportDescription = productSupportFactor?.reason ||
               (claim?.verificationStatus === "verified"
                 ? "Product-specific evidence directly supports the claim."
@@ -928,10 +965,8 @@
               <section class="dashboard-claim-card">
                 <h4>“${escapeHtml(truncate(wording, 160))}”</h4>
                 <dl class="dashboard-mini-facts">
-                  <div><dt>Source type</dt><dd>${escapeHtml(sourceLabel(claim?.sourceType || claim?.type || records[0]?.sourceType))}</dd></div>
-                  ${evidenceStatus ? `<div><dt>Evidence status</dt><dd>${escapeHtml(displayMachineStatus(evidenceStatus))}</dd></div>` : ""}
-                  <div><dt>Verification status</dt><dd>${escapeHtml(verificationStatus)}</dd></div>
-                  <div><dt>Extraction confidence</dt><dd>${escapeHtml(confidence)}</dd></div>
+                  <div><dt>Claim source</dt><dd>${escapeHtml(claimSourceLabel(claimSource))}</dd></div>
+                  <div><dt>Evidence assessment</dt><dd>${escapeHtml(claimEvidenceAssessmentLabel(claim?.verificationStatus || verificationStatus))}</dd></div>
                 </dl>
                 <details class="dashboard-details">
                   <summary>View claim evidence</summary>
