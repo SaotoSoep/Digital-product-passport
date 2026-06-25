@@ -828,7 +828,8 @@ function renderScoreFactors(title, factors, className) {
   `;
 }
 
-function renderScore(label, score) {
+function renderScore(label, score, options = {}) {
+  const showFactors = options.showFactors !== false;
   const available = score && score.status === "scored";
   const numericScore = available ? score.score : 0;
   const displayScore = available ? `${numericScore}/100` : "Not available";
@@ -841,8 +842,8 @@ function renderScore(label, score) {
       </div>
       ${available ? `<div class="score-track" aria-hidden="true"><span style="width: ${numericScore}%"></span></div>` : ""}
       ${score?.rationale ? `<p>${escapeHtml(cleanReadableText(score.rationale))}</p>` : ""}
-      ${renderScoreFactors("Top positive", score?.topPositiveFactors, "positive")}
-      ${renderScoreFactors("Most important missing", score?.missingFactors, "missing")}
+      ${showFactors ? renderScoreFactors("Top positive", score?.topPositiveFactors, "positive") : ""}
+      ${showFactors ? renderScoreFactors("Most important missing", score?.missingFactors, "missing") : ""}
     </div>
   `;
 }
@@ -1646,7 +1647,7 @@ function renderConsumerReport(model) {
         "report-scores",
         "Disclosure and claim scores",
         "These scores measure disclosure coverage and claim-evidence strength, not whether the product is environmentally preferable.",
-        `<div class="score-grid">${renderScore("Disclosure coverage", model.transparencyScore)}${renderScore("Claim-evidence strength", model.claimScore)}</div>`
+        `<div class="score-grid">${renderScore("Disclosure coverage", model.transparencyScore, { showFactors: false })}${renderScore("Claim-evidence strength", model.claimScore, { showFactors: false })}</div>`
       )}
       ${renderReportSection(
         "report-conclusion",
@@ -1735,6 +1736,11 @@ function renderTechnicalReport(model) {
         "Report metadata",
         "Source and saved-analysis identifiers.",
         metadata
+      )}
+      ${renderTechnicalDisclosure(
+        "Score internals",
+        "Rubric rationale, positive factors, and missing factors.",
+        `<div class="score-grid">${renderScore("Disclosure coverage", model.transparencyScore)}${renderScore("Claim-evidence strength", model.claimScore)}</div>`
       )}
     `,
     keyFacts: {

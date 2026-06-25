@@ -72,7 +72,7 @@
       label: "Key facts",
       className: "passport-module-key-facts",
       descriptions: {
-        overview: "Primary product information and compact disclosure scoring.",
+        overview: "Primary product information shown in short form.",
         evidence: "Evidence records for product identity, description, identifiers, and variant facts.",
         technical: "Readiness internals and normalized field coverage for core facts.",
       },
@@ -83,7 +83,7 @@
       label: "Material",
       className: "passport-module-material",
       descriptions: {
-        overview: "Material composition, reported percentages, and composition confidence.",
+        overview: "Material composition and reported percentages.",
         evidence: "Material evidence, citations, certificates, and extraction confidence.",
         technical: "Raw material fields and technical normalization for composition data.",
       },
@@ -430,7 +430,8 @@
     `;
   }
 
-  function renderScoreGauge(label, score, targetId) {
+  function renderScoreGauge(label, score, targetId, options = {}) {
+    const showDetails = options.showDetails !== false;
     const available = score?.status === "scored" && Number.isFinite(Number(score.score));
     const numeric = available ? Math.max(0, Math.min(100, Math.round(Number(score.score)))) : null;
     const status = available ? "Scored" : "Not available";
@@ -445,7 +446,7 @@
           <dd>${escapeHtml(available ? `${numeric}/100` : "Not available")}</dd>
         </div>
         <span class="dashboard-score-status">${escapeHtml(status)}</span>
-        <details class="passport-inline-details">
+        ${showDetails ? `<details class="passport-inline-details">
           <summary>Score explanation</summary>
           <p>${escapeHtml(summary)}</p>
           <div class="dashboard-score-factors" id="${escapeHtml(targetId)}">
@@ -458,12 +459,12 @@
               ${factorList(score?.missingFactors, "No missing score factors were returned.")}
             </section>
           </div>
-        </details>
+        </details>` : ""}
       </div>
     `;
   }
 
-  function renderPassportScores(model) {
+  function renderPassportScores(model, options = {}) {
     return `
       <article class="passport-section passport-score-section" aria-labelledby="passport-scores-title">
         <div class="passport-section-heading">
@@ -471,8 +472,8 @@
           <h4 id="passport-scores-title">Compact disclosure scores</h4>
         </div>
         <dl class="passport-score-list">
-          ${renderScoreGauge("Transparency", model?.transparencyScore, "transparency-score-details")}
-          ${renderScoreGauge("Claim strength", model?.claimScore, "claim-score-details")}
+          ${renderScoreGauge("Transparency", model?.transparencyScore, "transparency-score-details", options)}
+          ${renderScoreGauge("Claim strength", model?.claimScore, "claim-score-details", options)}
         </dl>
       </article>
     `;
@@ -521,7 +522,7 @@
       return "No clear sustainability claim found";
     }
 
-    const firstClaim = known(claims[0]?.originalWording || claims[0]?.brandClaim || claims[0]?.claim);
+    const firstClaim = known(claims[0]?.claimText || claims[0]?.originalWording || claims[0]?.brandClaim || claims[0]?.claim);
     return claims.length === 1
       ? firstClaim || "1 claim found"
       : `${claims.length} claims found`;
@@ -575,7 +576,7 @@
     const summary = known(model?.productSummary || model?.productDescription || model?.rawProductDescription);
     const fallback = model?.blockedPage || model?.extractionStatus === "failed"
       ? "The product page was not fully readable. The passport only shows information that could be returned."
-      : "No concise product summary was returned.";
+      : "No concise product summary is available.";
 
     return `
       <article class="passport-section passport-product-summary" aria-labelledby="passport-summary-card-title">
@@ -716,16 +717,16 @@
     const conflicts = materialConflictReasons(model, rows);
 
     if (rows.length === 0) {
-      reasons.push("No material composition was returned.");
+      reasons.push("No material composition was found.");
     }
 
     if (rows.length > 0 && percentages.some((percentage) => percentage === null)) {
-      reasons.push("One or more material percentages are missing or not numerically parseable.");
+      reasons.push("One or more material percentages were missing or unclear.");
     }
 
     const sum = percentages.reduce((total, percentage) => total + (percentage || 0), 0);
     if (rows.length > 0 && percentages.every((percentage) => percentage !== null) && (sum < 98 || sum > 102)) {
-      reasons.push(`Returned material percentages total ${Math.round(sum * 10) / 10}%, outside the accepted 98–102% range.`);
+      reasons.push(`The listed material percentages add up to ${Math.round(sum * 10) / 10}%, so the composition cannot be shown as complete.`);
     }
 
     return {
@@ -793,7 +794,7 @@
               ${renderMaterialLegend(validation.rows)}
             </div>
           </div>
-          <p class="dashboard-card-note">${escapeHtml(cleanText(model?.materialExplanation || "Percentages are visualised only because every returned material percentage is parseable and totals close to 100%."))}</p>
+          <p class="dashboard-card-note">The material chart is shown only when every listed percentage is clear and the total is close to 100%.</p>
           <p class="dashboard-card-note">Terms such as organic or recycled remain claim words unless a separate product-linked verification source is shown.</p>
         </article>
       `;
@@ -967,7 +968,7 @@
                 ? "Product-specific evidence directly supports the claim."
                 : claim?.verificationStatus === "partially-supported"
                 ? "Related product-specific evidence partially supports the claim."
-                : "No product-specific supporting factor was returned for this claim.");
+                : "No matching product-specific support was found for this claim.");
             const independentDescription = independent
               ? "An external product-linked evidence record is attached."
               : "No independent product-linked verification was found; brand or retailer wording is not counted as independent verification.";
@@ -982,7 +983,7 @@
                 <details class="dashboard-details">
                   <summary>View claim evidence</summary>
                   <ol class="dashboard-ladder" aria-label="Evidence ladder for claim">
-                    ${renderLadderStep("Claim wording found", "The claim wording is present in the returned report or evidence ledger.", "found")}
+                    ${renderLadderStep("Claim wording found", "The claim wording was found in the product information read by the agent.", "found")}
                     ${renderLadderStep("Product-specific support found", productSupportDescription, productSupportFound ? "found" : "missing")}
                     ${renderLadderStep("Independent product-linked verification found", independentDescription, independent ? "found" : "missing")}
                   </ol>
@@ -1264,7 +1265,7 @@
                 <h4>Other unknowns</h4>
                 <span>${escapeHtml(otherUnknowns.length)}</span>
               </div>
-              <p>Additional points returned by the report.</p>
+              <p>Additional points the agent could not confirm.</p>
               ${renderUnknownList(otherUnknowns, "No additional unknowns were returned.")}
             </section>
           </div>
@@ -1440,7 +1441,7 @@
     const bodyByKey = {
       summary: renderProductSummary(model),
       keyFacts: {
-        body: `${renderKeyFacts(model)}${renderPassportScores(model)}`,
+        body: `${renderKeyFacts(model)}${renderPassportScores(model, { showDetails: false })}`,
         layout: "card-grid",
       },
       material: {

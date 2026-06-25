@@ -259,7 +259,15 @@ test("renders compact score rows without treating unavailable as zero", () => {
   assert.match(scored, /72\/100/);
   assert.match(scored, /Scored/);
   assert.match(scored, /passport-score-row/);
+  assert.match(scored, /Score explanation/);
   assert.doesNotMatch(scored, /dashboard-gauge/);
+
+  const overviewScored = dashboard.renderScoreGauge("Transparency", buildModel().transparencyScore, "report-scores", {
+    showDetails: false,
+  });
+  assert.match(overviewScored, /72\/100/);
+  assert.doesNotMatch(overviewScored, /Score explanation/);
+  assert.doesNotMatch(overviewScored, /Positive factors|Missing factors/);
 
   const unavailable = dashboard.renderScoreGauge("Claim strength", {
     status: "not_available",
@@ -345,7 +353,7 @@ test("material visual is blocked by contradictory or incomplete percentages", ()
     ],
   });
   assert.equal(dashboard.validateMaterialComposition(incomplete).validForChart, false);
-  assert.match(dashboard.renderMaterialChart(incomplete), /outside the accepted 98–102% range/);
+  assert.match(dashboard.renderMaterialChart(incomplete), /percentages add up to 90%/);
 
   const conflicting = buildModel({
     materialItems: [
@@ -507,6 +515,7 @@ test("overview keeps evidence out of the main flow while preserving access", () 
   assert.match(rendered, /<summary>Original care text<\/summary>/);
   assert.doesNotMatch(rendered, /dashboard-evidence-list/);
   assert.doesNotMatch(rendered, /<q>/);
+  assert.doesNotMatch(rendered, /Score explanation|Positive factors|Missing factors|score factors|confidence|extraction|diagnostic|normalized evidence|Analysis ID|Submitted URL|parseable|evidence ledger|returned report/i);
   assert.match(evidence, /dashboard-evidence-list/);
   assert.match(evidence, /<q>/);
   assert.match(styles, /\.dashboard-details summary:focus-visible/);
