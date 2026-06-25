@@ -323,8 +323,7 @@
   function fieldStatusText(model, key) {
     const field = model?.fields?.[key] || {};
     const status = normalizeStatus(field.status);
-    const confidence = recordConfidence(fieldRecords(model, key));
-    return `${statusLabel(status)}${confidence ? ` · ${confidence} confidence` : ""}`;
+    return statusLabel(status);
   }
 
   function fieldValue(model, key, fallback = "") {
@@ -541,10 +540,22 @@
   }
 
   function renderKeyFacts(model) {
+    const assemblyStatus = normalizeStatus(model?.fields?.productionOrigin?.status);
+    const factoryStatus = normalizeStatus(model?.fields?.supplierDetails?.status);
     const rows = [
       renderKeyFact("Material", fieldValue(model, "materialComposition", model?.material), fieldStatusText(model, "materialComposition")),
-      renderKeyFact("Assembly country", assemblyCountryValue(model), fieldStatusText(model, "productionOrigin")),
-      renderKeyFact("Factory", factoryValue(model), fieldStatusText(model, "supplierDetails"), "Unavailable"),
+      renderKeyFact(
+        "Assembly country",
+        assemblyCountryValue(model),
+        fieldStatusText(model, "productionOrigin"),
+        assemblyStatus === "unavailable" ? "Unavailable" : "Not found"
+      ),
+      renderKeyFact(
+        "Factory",
+        factoryValue(model),
+        fieldStatusText(model, "supplierDetails"),
+        factoryStatus === "unavailable" ? "Unavailable" : "Not found"
+      ),
       renderKeyFact("Care", fieldValue(model, "careText", model?.care), fieldStatusText(model, "careText")),
       renderKeyFact("Claims", claimsSummary(model), fieldStatusText(model, "sustainabilityClaims"), "No clear claim found"),
     ];

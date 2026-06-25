@@ -280,8 +280,32 @@ test("key facts render at most five primary facts without inline evidence excerp
   for (const label of ["Material", "Assembly country", "Factory", "Care", "Claims"]) {
     assert.match(rendered, new RegExp(label));
   }
+  assert.doesNotMatch(rendered, /confidence/i);
   assert.doesNotMatch(rendered, /dashboard-evidence-list/);
   assert.doesNotMatch(rendered, /<q>/);
+});
+
+test("key facts show not found for readable origin fields that are absent", () => {
+  const rendered = dashboard.renderKeyFacts(buildModel({
+    fields: {
+      productionOrigin: {
+        status: "not_found",
+        values: [],
+        evidenceIds: [],
+        citationRecords: [],
+      },
+      supplierDetails: {
+        status: "not_found",
+        values: [],
+        evidenceIds: [],
+        citationRecords: [],
+      },
+    },
+  }));
+
+  assert.match(rendered, /Assembly country[\s\S]*Not found[\s\S]*<small>Not found<\/small>/);
+  assert.match(rendered, /Factory[\s\S]*Not found[\s\S]*<small>Not found<\/small>/);
+  assert.doesNotMatch(rendered, /Unavailable/);
 });
 
 test("evidence coverage keeps found, not found, and unavailable separate", () => {
