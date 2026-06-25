@@ -345,6 +345,33 @@ test("claim evidence ladder separates wording, product support, and independent 
   assert.doesNotMatch(rendered, /independently verified/i);
 });
 
+test("claim module prefers deterministic claim verification statuses", () => {
+  const rendered = dashboard.renderClaimEvidenceLadder(buildModel({
+    claimVerifications: [{
+      id: "clv_verified",
+      claimText: "Contains 78% organic cotton",
+      claimCategory: "organic",
+      sourceType: "product-page",
+      evidenceStatus: "present",
+      verificationStatus: "verified",
+      extractionConfidence: "high",
+      evidenceIds: ["ev_claim", "ev_material"],
+    }],
+  }));
+
+  assert.match(rendered, /Contains 78% organic cotton/);
+  assert.match(rendered, /Product page/);
+  assert.match(rendered, /Evidence status/);
+  assert.match(rendered, /present/);
+  assert.match(rendered, /Verification status/);
+  assert.match(rendered, /verified/);
+  assert.match(rendered, /Extraction confidence/);
+  assert.match(rendered, /high/);
+  assert.match(rendered, /The disclosed composition supports material wording in the claim|Product-specific evidence directly supports the claim/);
+  assert.match(rendered, /dashboard-ladder-step is-found[\s\S]*Product-specific support found/);
+  assert.doesNotMatch(rendered, /brand statement only/);
+});
+
 test("external evidence is required before a claim is shown as independently verified", () => {
   const externalRecord = evidenceRecord({
     id: "ev_external",

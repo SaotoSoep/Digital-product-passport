@@ -31,6 +31,9 @@
     product_page_deep_read: "Product page deep read",
     product_page_basic_extraction: "Product page basic extraction",
     user_provided_evidence: "User-provided evidence",
+    "product-page": "Product page",
+    "brand-page": "Brand page",
+    "external-source": "External source",
     brand_page: "Public brand page",
     public_database: "Public database",
     agent_interpretation: "Agent interpretation",
@@ -769,6 +772,10 @@
   }
 
   function dashboardClaims(model) {
+    if (Array.isArray(model?.claimVerifications) && model.claimVerifications.length > 0) {
+      return model.claimVerifications;
+    }
+
     const candidates = Array.isArray(model?.claimCitations) && model.claimCitations.length > 0
       ? model.claimCitations
       : Array.isArray(model?.claims)
@@ -786,7 +793,7 @@
     ]);
 
     const structured = candidates.filter((claim) => {
-      const category = cleanText(claim?.category).toLowerCase();
+      const category = cleanText(claim?.claimCategory || claim?.category).toLowerCase();
       const sourceType = cleanText(claim?.sourceType || claim?.type).toLowerCase();
       const verificationStatus = cleanText(claim?.verificationStatus).toLowerCase();
 
@@ -840,9 +847,20 @@
       return "No clear claim found";
     }
 
-    const hasExternal = claims.some((claim) => claimRecords(model, claim).some((record) => record.sourceType === "external_evidence"));
+    const hasExternal = claims.some((claim) =>
+      claim?.sourceType === "external-source" ||
+      claimRecords(model, claim).some((record) => record.sourceType === "external_evidence")
+    );
     if (hasExternal) {
       return "Independent product-linked verification found";
+    }
+
+    if (claims.some((claim) => claim?.verificationStatus === "verified")) {
+      return "Product-specific support found";
+    }
+
+    if (claims.some((claim) => claim?.verificationStatus === "partially-supported")) {
+      return "Partially supported claim";
     }
 
     const productSupportFactor = scoreFactor(model?.claimScore, "product_support");
@@ -885,13 +903,23 @@
         </div>
         <div class="dashboard-claim-stack">
           ${claims.map((claim) => {
-            const wording = known(claim?.originalWording || claim?.brandClaim || claim?.claim) || "Claim wording not supplied";
+            const wording = known(claim?.claimText || claim?.originalWording || claim?.brandClaim || claim?.claim) || "Claim wording not supplied";
             const records = claimRecords(model, claim);
-            const independent = records.some((record) => record.sourceType === "external_evidence");
+            const independent = claim?.sourceType === "external-source" ||
+              records.some((record) => record.sourceType === "external_evidence");
             const userProvided = records.some((record) => record.sourceType === "user_provided_evidence") || claim?.sourceType === "user_provided_evidence";
             const verificationStatus = displayMachineStatus(claim?.verificationStatus || (userProvided ? "user_provided" : "not_verified"));
-            const confidence = cleanText(claim?.confidenceDimension || claim?.confidence || records[0]?.extractionConfidence || "not supplied");
-            const productSupportDescription = productSupportFactor?.reason || "No product-specific supporting factor was returned for this claim.";
+            const evidenceStatus = cleanText(claim?.evidenceStatus);
+            const confidence = cleanText(claim?.extractionConfidence || claim?.confidenceDimension || claim?.confidence || records[0]?.extractionConfidence || "not supplied");
+            const claimHasProductSupport = evidenceStatus === "present" &&
+              ["verified", "partially-supported"].includes(claim?.verificationStatus);
+            const productSupportFound = hasProductSupport || claimHasProductSupport;
+            const productSupportDescription = productSupportFactor?.reason ||
+              (claim?.verificationStatus === "verified"
+                ? "Product-specific evidence directly supports the claim."
+                : claim?.verificationStatus === "partially-supported"
+                ? "Related product-specific evidence partially supports the claim."
+                : "No product-specific supporting factor was returned for this claim.");
             const independentDescription = independent
               ? "An external product-linked evidence record is attached."
               : "No independent product-linked verification was found; brand or retailer wording is not counted as independent verification.";
@@ -901,6 +929,7 @@
                 <h4>“${escapeHtml(truncate(wording, 160))}”</h4>
                 <dl class="dashboard-mini-facts">
                   <div><dt>Source type</dt><dd>${escapeHtml(sourceLabel(claim?.sourceType || claim?.type || records[0]?.sourceType))}</dd></div>
+                  ${evidenceStatus ? `<div><dt>Evidence status</dt><dd>${escapeHtml(displayMachineStatus(evidenceStatus))}</dd></div>` : ""}
                   <div><dt>Verification status</dt><dd>${escapeHtml(verificationStatus)}</dd></div>
                   <div><dt>Extraction confidence</dt><dd>${escapeHtml(confidence)}</dd></div>
                 </dl>
@@ -908,7 +937,7 @@
                   <summary>View claim evidence</summary>
                   <ol class="dashboard-ladder" aria-label="Evidence ladder for claim">
                     ${renderLadderStep("Claim wording found", "The claim wording is present in the returned report or evidence ledger.", "found")}
-                    ${renderLadderStep("Product-specific support found", productSupportDescription, hasProductSupport ? "found" : "missing")}
+                    ${renderLadderStep("Product-specific support found", productSupportDescription, productSupportFound ? "found" : "missing")}
                     ${renderLadderStep("Independent product-linked verification found", independentDescription, independent ? "found" : "missing")}
                   </ol>
                 </details>
