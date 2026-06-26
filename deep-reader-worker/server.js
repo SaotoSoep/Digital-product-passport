@@ -1,8 +1,10 @@
 const http = require("http");
-const dns = require("dns").promises;
-const net = require("net");
-const { URL } = require("url");
+const crypto = require("crypto");
 const { readDeepProductPage } = require("./lib/deep-reader");
+const {
+  isPrivateOrReservedIp,
+  validatePublicUrl,
+} = require("./lib/security/public-url");
 const packageJson = require("./package.json");
 const playwrightPackageJson = require("playwright/package.json");
 
@@ -11,7 +13,9 @@ const maxBodyBytes = Number(process.env.MAX_BODY_BYTES || 65536);
 const maxResponseEvidenceChars = Number(process.env.MAX_RESPONSE_EVIDENCE_CHARS || 500000);
 const rateLimitWindowMs = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000);
 const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || 30);
+const concurrencyMax = Math.max(1, Number(process.env.CONCURRENCY_MAX || 2));
 const requestCounts = new Map();
+let activeDeepReads = 0;
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -21,9 +25,21 @@ function sendJson(response, statusCode, payload) {
 }
 
 function clientIp(request) {
-  return String(request.headers["x-forwarded-for"] || request.socket.remoteAddress || "unknown")
-    .split(",")[0]
-    .trim();
+  if (process.env.TRUST_PROXY_HEADERS === "1") {
+    const trustedHeader = String(
+      request.headers["x-nf-client-connection-ip"] ||
+      request.headers["cf-connecting-ip"] ||
+      request.headers["true-client-ip"] ||
+      request.headers["x-forwarded-for"] ||
+      ""
+    ).split(",")[0].trim();
+
+    if (trustedHeader) {
+      return trustedHeader;
+    }
+  }
+
+  return request.socket.remoteAddress || "unknown";
 }
 
 function rateLimited(ip) {
@@ -38,59 +54,61 @@ function rateLimited(ip) {
   return current.count > rateLimitMax;
 }
 
-function isPrivateIp(address) {
-  if (!address) return true;
-  if (net.isIPv4(address)) {
-    const parts = address.split(".").map(Number);
-    return (
-      parts[0] === 10 ||
-      parts[0] === 127 ||
-      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
-      (parts[0] === 192 && parts[1] === 168) ||
-      (parts[0] === 169 && parts[1] === 254) ||
-      parts[0] === 0
-    );
-  }
-
-  if (net.isIPv6(address)) {
-    const lower = address.toLowerCase();
-    return lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
-  }
-
-  return true;
+function configuredWorkerToken() {
+  return String(process.env.DEEP_READER_WORKER_TOKEN || process.env.WORKER_SHARED_TOKEN || "").trim();
 }
 
-async function validatePublicUrl(rawUrl, lookup = dns.lookup) {
-  let parsed;
+function authRequired() {
+  if (process.env.DEEP_READER_WORKER_REQUIRE_AUTH === "1") {
+    return true;
+  }
+
+  if (process.env.ALLOW_UNAUTHENTICATED_DEEP_READ === "1") {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "production";
+}
+
+function constantTimeEquals(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+
+  if (leftBuffer.length !== rightBuffer.length || leftBuffer.length === 0) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function tokenFromRequest(request) {
+  const authorization = String(request.headers.authorization || "");
+  if (/^bearer\s+/i.test(authorization)) {
+    return authorization.replace(/^bearer\s+/i, "").trim();
+  }
+
+  return String(request.headers["x-deep-reader-token"] || "").trim();
+}
+
+function verifyWorkerAuth(request) {
+  if (!authRequired()) {
+    return true;
+  }
+
+  return constantTimeEquals(tokenFromRequest(request), configuredWorkerToken());
+}
+
+async function runWithConcurrency(task) {
+  if (activeDeepReads >= concurrencyMax) {
+    return { limited: true };
+  }
+
+  activeDeepReads += 1;
   try {
-    parsed = new URL(rawUrl);
-  } catch (error) {
-    return { ok: false, reason: "invalid_url" };
+    return { limited: false, value: await task() };
+  } finally {
+    activeDeepReads -= 1;
   }
-
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    return { ok: false, reason: "unsupported_protocol" };
-  }
-
-  if (process.env.ALLOW_PRIVATE_URLS === "1") {
-    return { ok: true, url: parsed.toString() };
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-  if (hostname === "localhost" || hostname.endsWith(".local")) {
-    return { ok: false, reason: "private_url_blocked" };
-  }
-
-  try {
-    const addresses = await lookup(hostname, { all: true, verbatim: false });
-    if (addresses.some((item) => isPrivateIp(item.address))) {
-      return { ok: false, reason: "private_url_blocked" };
-    }
-  } catch (error) {
-    return { ok: false, reason: "dns_lookup_failed" };
-  }
-
-  return { ok: true, url: parsed.toString() };
 }
 
 function failureReasonFor(value) {
@@ -105,14 +123,25 @@ function failureReasonFor(value) {
 
 function mapEvidence(result) {
   const rows = [];
+  let remainingChars = maxResponseEvidenceChars;
+
+  function take(value) {
+    if (remainingChars <= 0) return "";
+    const text = String(value || "").slice(0, remainingChars);
+    remainingChars -= text.length;
+    return text;
+  }
 
   for (const item of result.textEvidence || []) {
+    const text = take(item.text);
+    if (!text) break;
+
     rows.push({
       sourceUrl: item.sourceUrl || result.sourceUrl,
       sectionLabel: item.sectionLabel || "Deep page read",
       interactionType: item.interactionType ? item.interactionType.replace(/_/g, "-") : "read",
       selector: item.selector || "",
-      text: String(item.text || "").slice(0, maxResponseEvidenceChars),
+      text,
       json: null,
       confidence: "high",
       capturedAt: item.timestamp || result.completedAt || new Date().toISOString(),
@@ -120,12 +149,15 @@ function mapEvidence(result) {
   }
 
   for (const item of result.structuredData || []) {
+    const text = take(item.summary);
+    if (!text) break;
+
     rows.push({
       sourceUrl: item.sourceUrl || result.sourceUrl,
       sectionLabel: item.sectionLabel || "Structured product data",
       interactionType: "structured-data",
       selector: item.selector || "",
-      text: item.summary || "",
+      text,
       json: null,
       confidence: "medium",
       capturedAt: item.timestamp || result.completedAt || new Date().toISOString(),
@@ -133,12 +165,15 @@ function mapEvidence(result) {
   }
 
   for (const item of result.networkResponses || []) {
+    const text = take(item.summary);
+    if (!text) break;
+
     rows.push({
       sourceUrl: item.sourceUrl || result.sourceUrl,
       sectionLabel: "Network response",
       interactionType: "network-response",
       selector: "",
-      text: item.summary || "",
+      text,
       json: null,
       confidence: "medium",
       capturedAt: item.timestamp || result.completedAt || new Date().toISOString(),
@@ -197,9 +232,19 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  if (!verifyWorkerAuth(request)) {
+    sendJson(response, 401, { error: "unauthorized", failureReason: "access_denied" });
+    return;
+  }
+
   const ip = clientIp(request);
   if (rateLimited(ip)) {
     sendJson(response, 429, { error: "rate_limited", failureReason: "unknown_error" });
+    return;
+  }
+
+  if (activeDeepReads >= concurrencyMax) {
+    sendJson(response, 429, { error: "concurrency_limited", failureReason: "unknown_error" });
     return;
   }
 
@@ -234,10 +279,17 @@ const server = http.createServer(async (request, response) => {
     }), maxDurationMs);
   });
 
-  const result = await Promise.race([
+  const limitedResult = await runWithConcurrency(() => Promise.race([
     readDeepProductPage(validation.url, { force: true, timeoutMs: maxDurationMs }),
     timeoutResult,
-  ]);
+  ]));
+
+  if (limitedResult.limited) {
+    sendJson(response, 429, { error: "concurrency_limited", failureReason: "unknown_error" });
+    return;
+  }
+
+  const result = limitedResult.value;
 
   const responsePayload = mapResult(result, validation.url);
   sendJson(response, responsePayload.status === "failed" ? 200 : 200, responsePayload);
@@ -250,8 +302,12 @@ if (require.main === module) {
 }
 
 module.exports = {
+  authRequired,
+  clientIp,
   failureReasonFor,
-  isPrivateIp,
+  isPrivateIp: isPrivateOrReservedIp,
   mapResult,
+  tokenFromRequest,
   validatePublicUrl,
+  verifyWorkerAuth,
 };

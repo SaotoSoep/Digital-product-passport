@@ -12,6 +12,10 @@ const {
 } = require("./lib/product-page/deep-reader");
 const { callDeepReaderWorker } = require("./lib/product-page/deep-reader-worker-client");
 const {
+  fetchPublicText,
+  validatePublicUrlOrThrow,
+} = require("./lib/security/public-url");
+const {
   buildCanonicalClaims,
   buildCanonicalEvidenceLedger,
   buildProductPageEvidence,
@@ -33,6 +37,8 @@ const DEFAULT_ANALYSIS_DEEP_READER_TIMEOUT_MS = 25000;
 const MAX_ANALYSIS_DEEP_READER_TIMEOUT_MS = 30000;
 const MIN_LOCAL_DEEP_READER_FALLBACK_MS = 5000;
 const MAX_USER_PROVIDED_EVIDENCE_CHARS = 250000;
+const MAX_PRODUCT_PAGE_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_BRAND_JSON_RESPONSE_BYTES = 500000;
 
 const SYSTEM_PROMPT = `You are a product transparency analyst. You receive raw text scraped from a fashion or consumer product page and return a structured Product Passport Report as JSON.
 
@@ -1229,27 +1235,20 @@ function extractBrandInsightSnippets(html) {
 }
 
 async function fetchJson(candidateUrl, timeoutMs = 4500) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { response, text } = await fetchPublicText(candidateUrl, {
+    timeoutMs,
+    maxBytes: MAX_BRAND_JSON_RESPONSE_BYTES,
+    headers: {
+      "accept": "application/json",
+      "user-agent": USER_AGENT,
+    },
+  });
 
-  try {
-    const response = await fetch(candidateUrl, {
-      signal: controller.signal,
-      headers: {
-        "accept": "application/json",
-        "user-agent": USER_AGENT,
-      },
-    });
-    const text = await response.text();
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timeout);
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
   }
+
+  return JSON.parse(text);
 }
 
 function renderedJsonContentToHtml(payload) {
@@ -2135,44 +2134,36 @@ function buildPartialReport(
 }
 
 async function fetchHtml(productUrl, timeoutMs = 10000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { response, text, finalUrl } = await fetchPublicText(productUrl, {
+    timeoutMs,
+    maxBytes: MAX_PRODUCT_PAGE_RESPONSE_BYTES,
+    headers: {
+      "User-Agent": USER_AGENT,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
+    },
+  });
 
-  try {
-    const response = await fetch(productUrl, {
-      headers: {
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
-      },
-      redirect: "follow",
-      signal: controller.signal,
-    });
+  const contentType = response.headers.get("content-type") || "";
+  const accessIssue = detectAccessIssue({
+    status: response.status,
+    html: text,
+    url: finalUrl || productUrl,
+  });
 
-    const contentType = response.headers.get("content-type") || "";
-    const responseText = await response.text();
-    const accessIssue = detectAccessIssue({
-      status: response.status,
-      html: responseText,
-      url: response.url || productUrl,
-    });
-
-    if (accessIssue) {
-      throw createAccessError(accessIssue);
-    }
-
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-
-    if (!contentType.includes("text/html")) {
-      throw new Error("URL did not return an HTML page");
-    }
-
-    return responseText;
-  } finally {
-    clearTimeout(timeout);
+  if (accessIssue) {
+    throw createAccessError(accessIssue);
   }
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+
+  if (!contentType.includes("text/html")) {
+    throw new Error("URL did not return an HTML page");
+  }
+
+  return text;
 }
 
 function deepReadEvidenceScore(result) {
@@ -2274,17 +2265,9 @@ async function analyzeProductUrl(productUrl, options = {}) {
     throw new Error("Product URL is required");
   }
 
-  let parsedUrl;
-
-  try {
-    parsedUrl = new URL(productUrl);
-  } catch (error) {
-    throw new Error("Product URL is required");
-  }
-
-  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-    throw new Error("Product URL must start with http:// or https://");
-  }
+  const validation = await validatePublicUrlOrThrow(productUrl);
+  productUrl = validation.url;
+  const parsedUrl = new URL(productUrl);
 
   const userProvidedEvidence = normalizeUserProvidedEvidence(options.userProvidedEvidence);
 
