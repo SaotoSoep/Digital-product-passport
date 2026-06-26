@@ -815,6 +815,20 @@ function renderScoreFactors(title, factors, className) {
     return "";
   }
 
+  const renderEvidenceIds = (factor) => {
+    if (!Object.hasOwn(factor, "evidenceIds")) {
+      return "";
+    }
+
+    const ids = Array.isArray(factor.evidenceIds)
+      ? factor.evidenceIds.filter(Boolean)
+      : [];
+    const label = ids.length > 0
+      ? `Evidence IDs: ${ids.slice(0, 4).join(", ")}${ids.length > 4 ? `, +${ids.length - 4} more` : ""}`
+      : "Evidence IDs: none; see factor reason.";
+    return `<span class="score-factor-evidence">${escapeHtml(label)}</span>`;
+  };
+
   return `
     <div class="score-factors ${className}">
       <span>${escapeHtml(title)}</span>
@@ -822,6 +836,7 @@ function renderScoreFactors(title, factors, className) {
         <li>
           <strong>${escapeHtml(factor.label)}</strong>
           ${factor.reason ? `<span>${escapeHtml(cleanReadableText(factor.reason))}</span>` : ""}
+          ${renderEvidenceIds(factor)}
         </li>
       `).join("")}</ul>
     </div>
@@ -1038,12 +1053,12 @@ function renderClaimItem(claim, evidenceRecordIndex = new Map()) {
     <article class="claim-row">
       <div class="row-header">
         <h3>${escapeHtml(cleanReadableText(claimText))}</h3>
-        <span class="confidence-badge">${escapeHtml(displayText(confidence))}</span>
+        <span class="confidence-badge">Extraction confidence: ${escapeHtml(displayText(confidence))}</span>
       </div>
       ${claim.claimCategory || claim.category ? `<p><strong>Category:</strong> ${escapeHtml(displayMachineStatus(claim.claimCategory || claim.category))}</p>` : ""}
       ${type ? `<p><strong>Source type:</strong> ${escapeHtml(evidenceSourceLabel(type))}</p>` : ""}
       ${evidenceStatus ? `<p><strong>Evidence:</strong> ${escapeHtml(displayMachineStatus(evidenceStatus))}</p>` : ""}
-      <p><strong>Verification:</strong> ${escapeHtml(displayMachineStatus(verificationStatus))}</p>
+      <p><strong>Verification strength:</strong> ${escapeHtml(displayMachineStatus(verificationStatus))}</p>
       ${renderCitations(records)}
       ${whyItMatters ? `<p class="muted">${escapeHtml(cleanReadableText(whyItMatters))}</p>` : ""}
     </article>

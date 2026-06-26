@@ -123,6 +123,6 @@ test("renders machine verification statuses without treating not_found as empty"
   const appJs = fs.readFileSync(path.join(__dirname, "..", "public", "app.js"), "utf8");
 
   assert.match(appJs, /function displayMachineStatus/);
-  assert.match(appJs, /Verification:<\/strong>.*displayMachineStatus\(verificationStatus\)/);
-  assert.doesNotMatch(appJs, /Verification:<\/strong>.*cleanReadableText\(verificationStatus\)/);
+  assert.match(appJs, /Verification strength:<\/strong>.*displayMachineStatus\(verificationStatus\)/);
+  assert.doesNotMatch(appJs, /Verification strength:<\/strong>.*cleanReadableText\(verificationStatus\)/);
 });

@@ -56,9 +56,11 @@ Transparency measures disclosure only. Its weighted inputs total 100 points:
 
 Canonical contradictions deduct 10 points each, capped at a 15-point deduction. The score itself is always clamped to 0–100. URL, page title, fallback interpretation, brand prose, impact/LCA data, and regulatory compliance do not add points.
 
-Claim strength measures evidence for a disclosed claim, not whether the product is environmentally preferable. Its inputs are claim specificity (20), matching product-specific composition or performance support (25), independent product-linked certification support (35), origin/supplier traceability (15), and durability/test support (5). Contradictions deduct 15 points each, capped at 25 points.
+Claim strength measures evidence for a disclosed claim, not whether the product is environmentally preferable. Its inputs are claim specificity (20), matching product-specific composition or performance support (25), qualifying independent product-linked certification support (35), origin/supplier traceability (15), and durability/test support (5). Contradictions deduct 15 points each, capped at 25 points.
 
-A claim without both independent and product-specific support is capped: brand wording alone at 35, and a claim with only one of those support types at 60. A certification receives the full 35 points only when a product identifier links it to the assessed item. Every scored result returns factor-level reasons, deductions, the applied cap, its top two positive factors, and its two highest-weight missing factors for UI explanation.
+Independent support is provenance-aware. Product-page or brand-hosted certification wording receives zero independent-support points, even when a SKU or other product identifier is present on the same page. The 35-point independent-support factor is awarded only when a qualifying `external_evidence` ledger record links certification support to the assessed product identifier. External certification evidence that is not product-linked is shown in the factor rationale, but it does not receive independent-support points.
+
+A claim without both qualifying external product-linked evidence and product-specific support is capped: brand wording alone at 35, and a claim with only one of those support types at 60. Every scored result returns factor-level reasons, evidence IDs where available, deductions, the applied cap, its top two positive factors, and its two highest-weight missing factors for UI explanation. UI confidence labels distinguish extraction confidence from verification strength.
 
 These labels describe disclosure and evidence strength only. They must not characterize a product itself as sustainable or unsustainable.
 

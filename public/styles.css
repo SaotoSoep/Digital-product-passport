@@ -656,6 +656,12 @@ button {
   color: var(--muted);
 }
 
+.score-factors li .score-factor-evidence {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
 .score-factors.missing li::marker {
   color: var(--amber);
 }
@@ -1359,6 +1365,8 @@ button {
 .confidence-badge {
   background: var(--panel-soft);
   color: var(--muted);
+  white-space: normal;
+  text-align: right;
 }
 
 .verdict-pill.attention {

@@ -6,6 +6,10 @@ const {
   scoreProductPassport,
   scoreTransparency,
 } = require("../src/lib/product-passport/scorer");
+const {
+  EVIDENCE_SOURCE_TYPES,
+  createCanonicalEvidenceRecord,
+} = require("../src/lib/product-passport/evidence");
 
 const FIELD_KEYS = [
   "productName", "brand", "productIdentifiers", "productDescription",
@@ -28,6 +32,29 @@ function evidence(foundValues = {}, overrides = {}) {
   };
 }
 
+function withExternalCertification(input, excerpt, sourceUrl = "https://cert.example/products/certificate") {
+  const record = createCanonicalEvidenceRecord({
+    fieldKey: "certifications",
+    sourceType: EVIDENCE_SOURCE_TYPES.EXTERNAL,
+    status: "found",
+    sourceUrl,
+    excerpt,
+    captureMethod: "test_external_evidence",
+    capturedAt: "2026-06-24T08:00:00.000Z",
+    extractionConfidence: "high",
+  });
+
+  input.evidenceLedger = {
+    version: 1,
+    records: [...(input.evidenceLedger?.records || []), record],
+  };
+  return input;
+}
+
+function factor(result, key) {
+  return result.factors.find((item) => item.key === key);
+}
+
 const cases = [
   {
     name: "rich",
@@ -39,7 +66,7 @@ const cases = [
       certifications: ["GOTS certificate 123"], durabilityClaims: ["Two-year repair warranty"],
     }),
     transparency: { status: "scored", score: 100 },
-    claim: { status: "scored", score: 100 },
+    claim: { status: "scored", score: 60 },
   },
   {
     name: "sparse",
@@ -55,12 +82,12 @@ const cases = [
   },
   {
     name: "independently supported",
-    input: evidence({
+    input: withExternalCertification(evidence({
       productIdentifiers: ["SKU 99"],
       materialComposition: ["80% recycled polyester, 20% cotton"],
       sustainabilityClaims: ["Contains 80% recycled polyester"],
       certifications: ["GRS certificate CU-123456"],
-    }),
+    }), "GRS certificate CU-123456 applies to SKU 99."),
     transparency: { status: "scored", score: 43 },
     claim: { status: "scored", score: 80 },
   },
@@ -128,8 +155,72 @@ test("partially met prerequisites are exposed as missing-factor explanations", (
   assert(partialSupport.missingFactors.some((factor) => factor.key === "independent_support"));
   assert.match(
     partialSupport.missingFactors.find((factor) => factor.key === "independent_support").reason,
-    /no product identifier/i
+    /brand or product-page evidence/i
   );
+});
+
+test("independent support points require qualifying external product-linked evidence", async (t) => {
+  const scenarios = [
+    {
+      name: "brand certificate mention only",
+      input: evidence({
+        sustainabilityClaims: ["Certified organic cotton"],
+        certifications: ["GOTS certificate 123"],
+      }),
+      impact: 0,
+      status: "partial",
+      reason: /brand or product-page evidence/i,
+      hasEvidenceIds: false,
+    },
+    {
+      name: "brand certificate mention plus SKU",
+      input: evidence({
+        productIdentifiers: ["SKU 42"],
+        sustainabilityClaims: ["Certified organic cotton"],
+        certifications: ["GOTS certificate 123"],
+      }),
+      impact: 0,
+      status: "partial",
+      reason: /brand or product-page evidence/i,
+      hasEvidenceIds: false,
+    },
+    {
+      name: "external certificate without product linkage",
+      input: withExternalCertification(evidence({
+        productIdentifiers: ["SKU 42"],
+        sustainabilityClaims: ["Certified organic cotton"],
+        certifications: ["GOTS certificate 123"],
+      }), "GOTS certificate 123 covers the supplier standard."),
+      impact: 0,
+      status: "partial",
+      reason: /did not link to this product identifier/i,
+      hasEvidenceIds: true,
+    },
+    {
+      name: "external certificate linked to product identifier",
+      input: withExternalCertification(evidence({
+        productIdentifiers: ["SKU 42"],
+        sustainabilityClaims: ["Certified organic cotton"],
+        certifications: ["GOTS certificate 123"],
+      }), "GOTS certificate 123 applies to SKU 42."),
+      impact: 35,
+      status: "present",
+      reason: /external evidence links certification support/i,
+      hasEvidenceIds: true,
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, () => {
+      const result = scoreClaimStrength(scenario.input);
+      const independentSupport = factor(result, "independent_support");
+
+      assert.equal(independentSupport.impact, scenario.impact);
+      assert.equal(independentSupport.status, scenario.status);
+      assert.match(independentSupport.reason, scenario.reason);
+      assert.equal(independentSupport.evidenceIds.length > 0, scenario.hasEvidenceIds);
+    });
+  }
 });
 
 test("absence statements are not rewarded as claims or supporting evidence", () => {

@@ -82,8 +82,9 @@ test("falls back to analysis-only when draft saving is unavailable", () => {
 test("renders claim verification status from deterministic claimVerifications", () => {
   assert.match(app, /claimVerifications/);
   assert.match(app, /claim\.claimText/);
+  assert.match(app, /Extraction confidence:/);
   assert.match(app, /Evidence:<\/strong>.*displayMachineStatus\(evidenceStatus\)/);
-  assert.match(app, /Verification:<\/strong>.*displayMachineStatus\(verificationStatus\)/);
+  assert.match(app, /Verification strength:<\/strong>.*displayMachineStatus\(verificationStatus\)/);
   assert.match(app, /model\.claimVerifications\.length > 0/);
 });
 
@@ -94,4 +95,6 @@ test("keeps score rubric internals in the technical report", () => {
   assert.match(app, /renderScore\("Claim-evidence strength", model\.claimScore\)/);
   assert.match(app, /renderScore\("Disclosure coverage", model\.transparencyScore, \{ showFactors: false \}\)/);
   assert.match(app, /renderScore\("Claim-evidence strength", model\.claimScore, \{ showFactors: false \}\)/);
+  assert.match(app, /Evidence IDs:/);
+  assert.match(app, /score-factor-evidence/);
 });

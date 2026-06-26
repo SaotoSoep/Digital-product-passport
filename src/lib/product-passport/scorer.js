@@ -1,3 +1,5 @@
+const { EVIDENCE_SOURCE_TYPES } = require("./evidence");
+
 const MATERIAL_TERMS = [
   "cotton", "katoen", "linen", "linnen", "wool", "wol", "polyester",
   "polyamide", "nylon", "viscose", "elastane", "leather", "leer", "silk", "zijde",
@@ -39,6 +41,79 @@ function values(evidence, key) {
         .map((value) => String(value))
         .filter((value) => !isAbsenceStatement(value, key))
     : [];
+}
+
+function canonicalText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function unique(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function evidenceRecords(evidence) {
+  return Array.isArray(evidence?.evidenceLedger?.records)
+    ? evidence.evidenceLedger.records
+    : [];
+}
+
+function evidenceRecordIndex(evidence) {
+  return new Map(evidenceRecords(evidence).map((record) => [record.id, record]));
+}
+
+function fieldEvidenceIds(evidence, key) {
+  const item = field(evidence, key);
+  if (!item) {
+    return [];
+  }
+
+  return unique([
+    ...(Array.isArray(item.valueEvidenceIds) ? item.valueEvidenceIds : []),
+    ...(Array.isArray(item.evidenceIds) ? item.evidenceIds : []),
+  ]);
+}
+
+function recordsForField(evidence, key, options = {}) {
+  const { foundOnly = true } = options;
+  const index = evidenceRecordIndex(evidence);
+  const fromFieldIds = fieldEvidenceIds(evidence, key)
+    .map((id) => index.get(id))
+    .filter(Boolean);
+  const fromLedger = evidenceRecords(evidence)
+    .filter((record) => record.fieldKey === key);
+  const records = [...fromFieldIds, ...fromLedger];
+
+  return unique(records.map((record) => record.id))
+    .map((id) => index.get(id) || records.find((record) => record.id === id))
+    .filter((record) => record && (!foundOnly || record.status === "found"));
+}
+
+function evidenceIdsForRecords(records) {
+  return unique(records.map((record) => record.id));
+}
+
+function factorEvidenceIds(evidence, keys) {
+  return unique(keys.flatMap((key) => recordsForField(evidence, key).map((record) => record.id)));
+}
+
+function productIdentifierTokens(evidence) {
+  return values(evidence, "productIdentifiers")
+    .map(canonicalText)
+    .filter((value) => value.length >= 3);
+}
+
+function externalRecordLinksToProduct(record, evidence) {
+  if (!record || record.sourceType !== EVIDENCE_SOURCE_TYPES.EXTERNAL) {
+    return false;
+  }
+
+  const identifiers = productIdentifierTokens(evidence);
+  if (identifiers.length === 0) {
+    return false;
+  }
+
+  const haystack = canonicalText(`${record.excerpt || ""} ${record.sourceUrl || ""}`);
+  return identifiers.some((identifier) => haystack.includes(identifier));
 }
 
 function isAbsenceStatement(value, key) {
@@ -134,6 +209,7 @@ function scoreTransparency(evidence) {
       reason: impact > 0
         ? `${foundCount} of ${factor.fields.length} weighted disclosure field(s) found.`
         : "No canonical product-page evidence was found for this factor.",
+      evidenceIds: factorEvidenceIds(evidence, factor.fields),
     };
   });
   const contradictions = detectContradictions(evidence);
@@ -172,6 +248,7 @@ function scoreClaimStrength(evidence) {
   }
 
   const claimText = values(evidence, "sustainabilityClaims").join(" ").toLowerCase();
+  const claimRecords = recordsForField(evidence, "sustainabilityClaims");
   if (!claimText) {
     return unavailableResult("claim_strength", "Not available because no product-level sustainability claim was found to assess.");
   }
@@ -184,14 +261,33 @@ function scoreClaimStrength(evidence) {
   const hasFullTraceability = found(evidence, "productionOrigin") && found(evidence, "supplierDetails");
   const hasDurabilitySupport = found(evidence, "durabilityClaims");
   const isSpecific = /\d|%|certif|gecertificeerd|recycled|gerecycled|organic|biologisch|traceab|product/i.test(claimText);
-  const productSpecificSupport = hasMaterialSupport || hasDurabilitySupport || (hasCertification && hasProductIdentifier);
-  const independentProductSupport = hasCertification && hasProductIdentifier;
+  const materialSupportRecords = hasMaterialSupport ? recordsForField(evidence, "materialComposition") : [];
+  const durabilitySupportRecords = hasDurabilitySupport ? recordsForField(evidence, "durabilityClaims") : [];
+  const certificationRecords = recordsForField(evidence, "certifications");
+  const externalCertificationRecords = certificationRecords
+    .filter((record) => record.sourceType === EVIDENCE_SOURCE_TYPES.EXTERNAL);
+  const qualifyingExternalCertificationRecords = externalCertificationRecords
+    .filter((record) => externalRecordLinksToProduct(record, evidence));
+  const productSpecificSupport = hasMaterialSupport || hasDurabilitySupport;
+  const independentProductSupport = qualifyingExternalCertificationRecords.length > 0;
+  const productSupportEvidenceIds = evidenceIdsForRecords([
+    ...materialSupportRecords,
+    ...durabilitySupportRecords,
+  ]);
+  const independentEvidenceIds = evidenceIdsForRecords(
+    qualifyingExternalCertificationRecords.length > 0
+      ? qualifyingExternalCertificationRecords
+      : externalCertificationRecords.length > 0
+      ? externalCertificationRecords
+      : certificationRecords
+  );
 
   const factors = [
     {
       key: "specificity", label: "Specific claim wording", weight: 20,
       impact: isSpecific ? 20 : 5, status: isSpecific ? "present" : "partial",
       reason: isSpecific ? "The claim contains concrete product or material wording." : "The claim is broad brand wording.",
+      evidenceIds: evidenceIdsForRecords(claimRecords),
     },
     {
       key: "product_support", label: "Product-specific supporting data", weight: 25,
@@ -202,27 +298,35 @@ function scoreClaimStrength(evidence) {
         : hasDurabilitySupport
         ? "Product-level durability, repair, or warranty evidence supports the claim."
         : "No matching product-specific composition or performance support was found.",
+      evidenceIds: productSupportEvidenceIds,
     },
     {
       key: "independent_support", label: "Independent product-linked support", weight: 35,
-      impact: independentProductSupport ? 35 : hasCertification ? 15 : 0,
+      impact: independentProductSupport ? 35 : 0,
       status: independentProductSupport ? "present" : hasCertification ? "partial" : "missing",
       reason: independentProductSupport
-        ? "A certification reference is linked alongside a product identifier."
+        ? "Qualifying external evidence links certification support to this product identifier."
+        : externalCertificationRecords.length > 0 && hasProductIdentifier
+        ? "External certification evidence was found, but it did not link to this product identifier."
+        : externalCertificationRecords.length > 0
+        ? "External certification evidence was found, but no product identifier was available for product linkage."
         : hasCertification
-        ? "A certification reference is present, but no product identifier links it to this item."
-        : "No certification or independent support was found on the product page.",
+        ? "Certification wording is present only as brand or product-page evidence, not independent verification."
+        : "No certification or independent support was found in the evidence ledger.",
+      evidenceIds: independentEvidenceIds,
     },
     {
       key: "traceability", label: "Origin and supplier traceability", weight: 15,
       impact: hasFullTraceability ? 15 : hasTraceability ? 8 : 0,
       status: hasFullTraceability ? "present" : hasTraceability ? "partial" : "missing",
       reason: hasFullTraceability ? "Both production origin and supplier/factory details are disclosed." : hasTraceability ? "One traceability field is disclosed." : "No origin or supplier support was found.",
+      evidenceIds: factorEvidenceIds(evidence, ["productionOrigin", "supplierDetails"]),
     },
     {
       key: "performance", label: "Durability or test support", weight: 5,
       impact: hasDurabilitySupport ? 5 : 0, status: hasDurabilitySupport ? "present" : "missing",
       reason: hasDurabilitySupport ? "Durability, repair, or warranty evidence is disclosed." : "No durability or test support was found.",
+      evidenceIds: evidenceIdsForRecords(durabilitySupportRecords),
     },
   ];
 
@@ -235,7 +339,10 @@ function scoreClaimStrength(evidence) {
   const uncappedScore = Math.max(0, factors.reduce((sum, factor) => sum + factor.impact, 0) - deductionValue);
   const cap = independentProductSupport && productSpecificSupport
     ? null
-    : { value: productSpecificSupport || hasCertification ? 60 : 35, reason: "High claim strength requires both independent and product-specific support." };
+    : {
+        value: productSpecificSupport || independentProductSupport ? 60 : 35,
+        reason: "High claim strength requires both qualifying external product-linked evidence and product-specific support.",
+      };
   const score = Math.max(0, Math.min(100, cap ? Math.min(uncappedScore, cap.value) : uncappedScore));
   const { positives, missing } = positiveAndMissing(factors);
 
