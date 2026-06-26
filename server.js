@@ -4,12 +4,21 @@ const path = require("path");
 const { URL } = require("url");
 
 const { analyzeProductUrl } = require("./src/analyzer");
+const {
+  createAnalyzeGateway,
+  errorResponseFromBodyError,
+} = require("./src/http/analyze-gateway");
 const { safeHandlePassportApi } = require("./src/http/passport-api");
 const { SqlitePassportStore } = require("./src/lib/storage/sqlite");
+const {
+  DEFAULT_REQUEST_BODY_LIMIT_BYTES,
+  clientKeyFromNodeRequest,
+  numberFromEnv,
+  readNodeJsonBody,
+} = require("./src/lib/security/request-controls");
 
 const publicDir = path.join(__dirname, "public");
 const port = process.env.PORT || 3000;
-const passportStore = new SqlitePassportStore();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -54,90 +63,89 @@ function serveStaticFile(requestPath, response) {
   });
 }
 
-function collectRequestBody(request) {
-  return new Promise((resolve, reject) => {
-    let rawBody = "";
+function collectRequestBody(request, maxBytes = DEFAULT_REQUEST_BODY_LIMIT_BYTES) {
+  return readNodeJsonBody(request, maxBytes);
+}
 
-    request.on("data", (chunk) => {
-      rawBody += chunk;
+function createAppServer({
+  analyzer = analyzeProductUrl,
+  passportStore = new SqlitePassportStore(),
+} = {}) {
+  const analyzeGateway = createAnalyzeGateway({ analyzer });
+  const maxApiBodyBytes = numberFromEnv(
+    "MAX_API_BODY_BYTES",
+    DEFAULT_REQUEST_BODY_LIMIT_BYTES,
+    1,
+    1024 * 1024
+  );
 
-      if (rawBody.length > 1e6) {
-        reject(new Error("Request body too large"));
-        request.destroy();
-      }
-    });
+  return http.createServer(async (request, response) => {
+    const method = request.method || "GET";
+    const requestUrl = new URL(request.url || "/", `http://${request.headers.host}`);
 
-    request.on("end", () => {
-      if (!rawBody) {
-        resolve({});
+    if (method === "POST" && requestUrl.pathname === "/api/analyze") {
+      let body;
+
+      try {
+        body = await collectRequestBody(request, maxApiBodyBytes);
+      } catch (error) {
+        const apiError = errorResponseFromBodyError(error);
+        sendJson(response, apiError.statusCode, apiError.payload);
         return;
       }
 
-      try {
-        resolve(JSON.parse(rawBody));
-      } catch (error) {
-        reject(new Error("Invalid JSON body"));
-      }
-    });
+      const apiResponse = await analyzeGateway.handle({
+        body,
+        clientKey: clientKeyFromNodeRequest(request),
+      });
+      sendJson(response, apiResponse.statusCode, apiResponse.payload);
+      return;
+    }
 
-    request.on("error", reject);
+    if (requestUrl.pathname.startsWith("/api/")) {
+      let body = {};
+
+      if (method === "POST" || method === "PATCH") {
+        try {
+          body = await collectRequestBody(request, maxApiBodyBytes);
+        } catch (error) {
+          const apiError = errorResponseFromBodyError(error);
+          sendJson(response, apiError.statusCode, apiError.payload);
+          return;
+        }
+      }
+
+      const passportApiResponse = await safeHandlePassportApi({
+        method,
+        pathname: requestUrl.pathname,
+        body,
+        searchParams: requestUrl.searchParams,
+        store: passportStore,
+      });
+
+      if (passportApiResponse) {
+        sendApiResponse(response, passportApiResponse);
+        return;
+      }
+    }
+
+    if (method === "GET") {
+      serveStaticFile(requestUrl.pathname, response);
+      return;
+    }
+
+    sendJson(response, 405, { error: "Method not allowed" });
   });
 }
 
-const server = http.createServer(async (request, response) => {
-  const method = request.method || "GET";
-  const requestUrl = new URL(request.url || "/", `http://${request.headers.host}`);
+if (require.main === module) {
+  const server = createAppServer();
+  server.listen(port, () => {
+    console.log(`Product Passport Agent running at http://localhost:${port}`);
+  });
+}
 
-  if (method === "POST" && requestUrl.pathname === "/api/analyze") {
-    try {
-      const body = await collectRequestBody(request);
-      const report = await analyzeProductUrl(body.productUrl, {
-        userProvidedEvidence: body.userProvidedEvidence,
-      });
-      sendJson(response, 200, report);
-    } catch (error) {
-      const statusCode = /^(Product URL|User-provided evidence|An HTML file name)/.test(error.message || "") ? 400 : 500;
-      sendJson(response, statusCode, {
-        error: error.message || "Unexpected error",
-      });
-    }
-    return;
-  }
-
-  if (requestUrl.pathname.startsWith("/api/")) {
-    let body = {};
-
-    if (method === "POST" || method === "PATCH") {
-      try {
-        body = await collectRequestBody(request);
-      } catch (error) {
-        sendJson(response, 400, { error: error.message || "Invalid request body" });
-        return;
-      }
-    }
-
-    const passportApiResponse = await safeHandlePassportApi({
-      method,
-      pathname: requestUrl.pathname,
-      body,
-      searchParams: requestUrl.searchParams,
-      store: passportStore,
-    });
-
-    if (passportApiResponse) {
-      sendApiResponse(response, passportApiResponse);
-      return;
-    }
-  }
-
-  if (method === "GET") {
-    serveStaticFile(requestUrl.pathname, response);
-    return;
-  }
-
-  sendJson(response, 405, { error: "Method not allowed" });
-});
-
-server.listen(port, () => {
-  console.log(`Product Passport Agent running at http://localhost:${port}`);
-});
+module.exports = {
+  collectRequestBody,
+  createAppServer,
+};
