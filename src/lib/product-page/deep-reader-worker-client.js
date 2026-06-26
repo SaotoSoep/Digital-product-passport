@@ -160,15 +160,22 @@ async function callDeepReaderWorker(productUrl, options = {}) {
   }
 
   const timeoutMs = Number(options.timeoutMs || process.env.DEEP_READER_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS);
+  const authToken = cleanText(options.authToken || process.env.DEEP_READER_WORKER_TOKEN);
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await (options.fetchImpl || fetch)(workerUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         url: productUrl,
         options: {

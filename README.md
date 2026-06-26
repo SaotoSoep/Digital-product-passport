@@ -115,6 +115,28 @@ data/product-passports.sqlite
 - `GET /api/public/passports/:publicId` returns a published passport by public id.
 - `POST /api/analyze` remains available as the raw analysis endpoint.
 
+### Analysis gateway safety controls
+
+The public analysis path validates submitted product URLs before any page fetch,
+deep-read worker call, or AI analysis starts. By default it only accepts public
+`http` and `https` URLs, rejects localhost/private/link-local/reserved IP
+ranges, resolves DNS before fetch, revalidates redirect targets, applies fetch
+timeouts, and caps request/response body sizes.
+
+Useful environment variables:
+
+```bash
+MAX_API_BODY_BYTES=131072
+ANALYZE_RATE_LIMIT_WINDOW_MS=60000
+ANALYZE_RATE_LIMIT_MAX=20
+ANALYZE_CONCURRENCY_MAX=3
+ANALYZE_DUPLICATE_TTL_MS=30000
+```
+
+Set `ALLOW_PRIVATE_URLS=1` only for explicit local development scenarios, such
+as analyzing the bundled `localhost` demo pages. Do not enable it on public
+deployments.
+
 ## Deployment
 
 The existing Netlify deployment path still uses:
@@ -138,6 +160,7 @@ Set these Netlify environment variables before deploying the frontend/functions:
 ```bash
 npx netlify env:set DEEP_READER_WORKER_URL "https://deep-reader-worker.onrender.com/deep-read"
 npx netlify env:set DEEP_READER_WORKER_TIMEOUT_MS "30000"
+npx netlify env:set DEEP_READER_WORKER_TOKEN "<shared-server-token>"
 npx netlify deploy --prod --skip-functions-cache
 ```
 

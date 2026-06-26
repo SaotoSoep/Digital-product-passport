@@ -71,6 +71,31 @@ test("returns failed deep read evidence from a failed worker response", async ()
   assert.equal(result.mode, "Deep read blocked");
 });
 
+test("sends worker auth token when configured", async () => {
+  let receivedHeaders = {};
+  const result = await callDeepReaderWorker("https://shop.example/product", {
+    workerUrl: "https://worker.example/deep-read",
+    authToken: "shared-secret",
+    fetchImpl: async (_url, options) => {
+      receivedHeaders = options.headers;
+      return {
+        ok: true,
+        text: async () => JSON.stringify({
+          status: "failed",
+          failureReason: "no_relevant_interactive_sections_found",
+          sourceUrl: "https://shop.example/product",
+          finalUrl: "https://shop.example/product",
+          deepReadSummary: {},
+          evidence: [],
+        }),
+      };
+    },
+  });
+
+  assert.equal(receivedHeaders.Authorization, "Bearer shared-secret");
+  assert.equal(result.failureReason, "no relevant interactive sections found");
+});
+
 test("normalizes unsupported rendering worker responses", async () => {
   const result = await callDeepReaderWorker("https://shop.example/product", {
     workerUrl: "https://worker.example/deep-read",
