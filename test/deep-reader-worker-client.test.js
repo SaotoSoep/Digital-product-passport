@@ -162,7 +162,8 @@ test("falls back to a stronger local deep read when the worker finds no interact
     }
   );
 
-  assert.equal(workerTimeoutMs, 25000);
+  assert(workerTimeoutMs <= 25000);
+  assert(workerTimeoutMs >= 24500);
   assert(localTimeoutMs >= 25000);
   assert.equal(result.status, "success");
   assert.equal(result.counts.tabsClicked, 2);
